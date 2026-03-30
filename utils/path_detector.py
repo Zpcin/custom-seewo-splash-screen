@@ -712,16 +712,28 @@ class PathDetector:
         if not os.path.isdir(directory):
             return []
 
-        files = []
+        matched_files = []
+        png_files = []
         try:
             for entry in os.listdir(directory):
                 entry_path = os.path.join(directory, entry)
-                if os.path.isfile(entry_path) and PathDetector._is_wps_splash_filename(entry):
-                    files.append(entry_path)
+                if not os.path.isfile(entry_path):
+                    continue
+
+                lower_name = entry.lower()
+                if lower_name.endswith(".png"):
+                    png_files.append(entry_path)
+
+                if PathDetector._is_wps_splash_filename(entry):
+                    matched_files.append(entry_path)
         except (PermissionError, OSError):
             return []
 
-        return sorted(files)
+        # 优先返回已知命名的启动图；若未命中，则回退为目录内所有 PNG 文件
+        if matched_files:
+            return sorted(matched_files)
+
+        return sorted(png_files)
     
     @staticmethod
     def get_wps_splash_files(splash_dir):
