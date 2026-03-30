@@ -44,13 +44,14 @@ class MessageHelper:
         )
     
     @staticmethod
-    def show_warning(parent, title: str, message: str):
+    def show_warning(parent, title: str, message: str, duration: int = 4000):
         """显示警告消息
         
         Args:
             parent: 父窗口
             title: 标题
             message: 消息内容
+            duration: 显示持续时间(毫秒)
         """
         InfoBar.warning(
             title=title,
@@ -58,6 +59,6 @@ class MessageHelper:
             orient=Qt.Orientation.Horizontal,
             isClosable=True,
             position=InfoBarPosition.TOP,
-            duration=4000,
+            duration=duration,
             parent=parent
         )

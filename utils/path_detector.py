@@ -1,12 +1,19 @@
 import os
 import glob
 import re
+import subprocess
 from qfluentwidgets import MessageBox
 from PyQt5.QtWidgets import QFileDialog
+
+try:
+    import winreg
+except ImportError:
+    winreg = None
 
 
 class PathDetector:
     """检测希沃白板启动图片路径"""
+    _wps_install_base_paths_cache = None
     
     @staticmethod
     def _get_available_drives():
@@ -249,10 +256,8 @@ class PathDetector:
         # 2. 检测Program Files下的WPS路径
         splash_dirs.extend(PathDetector._detect_wps_program_files_paths())
         
-        # 去重并返回第一个找到的splash目录
-        if splash_dirs:
-            return [splash_dirs[0]]  # 返回第一个找到的splash目录
-        return []
+        # 去重并返回所有找到的splash目录
+        return list(dict.fromkeys(splash_dirs))
     
     @staticmethod
     def _detect_wps_user_paths():
@@ -372,37 +377,26 @@ class PathDetector:
     
     @staticmethod
     def _detect_wps_program_files_paths():
-        r"""检测Program Files下的WPS路径
+        r"""检测系统安装目录下的WPS路径
         
         路径格式：C:\Program Files\Kingsoft\WPS Office\office6\mui\[语言]\res\splash\
         或：C:\Program Files\Kingsoft\WPS Office\office6\mui\[语言]\resource\splash\
         """
         splash_dirs = []
-        
-        # WPS Office可能的安装路径
-        possible_base_paths = [
-            "C:\\Program Files\\Kingsoft\\WPS Office",
-            "C:\\Program Files (x86)\\Kingsoft\\WPS Office",
-            "C:\\Program Files\\WPS Office",
-            "C:\\Program Files (x86)\\WPS Office",
-        ]
-        
-        # 尝试多个盘符
-        for drive_letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
-            possible_base_paths.extend([
-                f"{drive_letter}:\\Program Files\\Kingsoft\\WPS Office",
-                f"{drive_letter}:\\Program Files (x86)\\Kingsoft\\WPS Office",
-                f"{drive_letter}:\\Program Files\\WPS Office",
-                f"{drive_letter}:\\Program Files (x86)\\WPS Office",
-            ])
+
+        possible_base_paths = PathDetector._get_wps_install_base_paths()
         
         # WPS可能的splash目录路径模式
         # 注意：可能是res或resource
         splash_dir_patterns = [
             "office6\\mui\\*\\resource\\splash",  # 用户目录格式
             "office6\\mui\\*\\res\\splash",        # Program Files格式
+            "*\\office6\\mui\\*\\resource\\splash",  # Program Files 含版本号目录
+            "*\\office6\\mui\\*\\res\\splash",       # Program Files 含版本号目录
             "office6\\res\\splash",
+            "*\\office6\\res\\splash",
             "wps\\res\\splash",
+            "*\\wps\\res\\splash",
         ]
         
         for base_path in possible_base_paths:
@@ -417,10 +411,271 @@ class PathDetector:
                                 splash_dirs.append(splash_dir)
         
         return splash_dirs
+
+    @staticmethod
+    def _get_wps_install_base_paths():
+        """获取WPS Office可能的安装根目录。"""
+        if PathDetector._wps_install_base_paths_cache is not None:
+            return PathDetector._wps_install_base_paths_cache
+
+        paths = []
+
+        # 1) 注册表安装信息（最可靠）
+        paths.extend(PathDetector._get_wps_base_paths_from_registry())
+
+        # 2) Program Files 常见目录兜底
+        for root in PathDetector._get_program_files_roots():
+            paths.extend([
+                os.path.join(root, "Kingsoft", "WPS Office"),
+                os.path.join(root, "WPS Office"),
+            ])
+
+        dedup_paths = list(dict.fromkeys(paths))
+
+        # 3) 仅在前两步都没有命中现有目录时，再扫描快捷方式（耗时操作）
+        if not any(os.path.isdir(path) for path in dedup_paths):
+            dedup_paths.extend(PathDetector._get_wps_base_paths_from_shortcuts())
+
+        # 去重并保留顺序
+        PathDetector._wps_install_base_paths_cache = list(dict.fromkeys(dedup_paths))
+        return PathDetector._wps_install_base_paths_cache
+
+    @staticmethod
+    def _get_wps_base_paths_from_registry():
+        """从卸载注册表中提取WPS安装目录。"""
+        if winreg is None:
+            return []
+
+        uninstall_roots = [
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+            (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        ]
+
+        paths = []
+        for hive, root_path in uninstall_roots:
+            try:
+                with winreg.OpenKey(hive, root_path) as root_key:
+                    index = 0
+                    while True:
+                        try:
+                            subkey_name = winreg.EnumKey(root_key, index)
+                            index += 1
+                        except OSError:
+                            break
+
+                        try:
+                            with winreg.OpenKey(root_key, subkey_name) as app_key:
+                                display_name = PathDetector._read_registry_value(app_key, "DisplayName")
+                                publisher = PathDetector._read_registry_value(app_key, "Publisher")
+                                install_location = PathDetector._read_registry_value(app_key, "InstallLocation")
+                                uninstall_string = PathDetector._read_registry_value(app_key, "UninstallString")
+                                display_icon = PathDetector._read_registry_value(app_key, "DisplayIcon")
+
+                                if not PathDetector._is_wps_registry_entry(display_name, publisher):
+                                    continue
+
+                                for raw in (install_location, uninstall_string, display_icon):
+                                    paths.extend(PathDetector._extract_wps_base_paths_from_text(raw))
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+
+        return list(dict.fromkeys(paths))
+
+    @staticmethod
+    def _read_registry_value(reg_key, value_name):
+        """读取注册表字符串值，读取失败时返回空字符串。"""
+        try:
+            value, _ = winreg.QueryValueEx(reg_key, value_name)
+            return str(value)
+        except OSError:
+            return ""
+
+    @staticmethod
+    def _is_wps_registry_entry(display_name, publisher):
+        """判断注册表项是否为WPS相关软件。"""
+        text = f"{display_name} {publisher}".lower()
+        if "kingsoft" in text:
+            return True
+        if "wps office" in text:
+            return True
+        return bool(re.search(r"\bwps\b", text))
+
+    @staticmethod
+    def _extract_wps_base_paths_from_text(text):
+        """从注册表字符串中提取WPS安装根目录候选。"""
+        if not text:
+            return []
+
+        value = text.strip()
+        if not value:
+            return []
+
+        # DisplayIcon 常见格式: C:\path\to\app.exe,0
+        if "," in value and value.lower().endswith((".exe,0", ".exe,1", ".exe,2")):
+            value = value.rsplit(",", 1)[0]
+
+        # UninstallString 常见格式: "C:\path\app.exe" /uninstall
+        if value.startswith('"'):
+            quote_end = value.find('"', 1)
+            if quote_end > 1:
+                value = value[1:quote_end]
+
+        value = value.split(" /", 1)[0].split(" -", 1)[0]
+
+        exe_marker = value.lower().find(".exe")
+        if exe_marker != -1:
+            value = value[:exe_marker + 4]
+
+        value = value.strip().strip('"')
+        if not value:
+            return []
+
+        return PathDetector._normalize_wps_base_paths(value)
+
+    @staticmethod
+    def _normalize_wps_base_paths(path_value):
+        """将路径标准化为WPS安装根目录候选。"""
+        value = path_value.replace("/", "\\").strip().strip('"')
+        if not value:
+            return []
+
+        if value.lower().endswith(".exe"):
+            value = os.path.dirname(value)
+
+        candidates = [value]
+        parts = [part for part in value.split("\\") if part]
+
+        # 提取 ...\Kingsoft\WPS Office 或 ...\WPS Office 作为优先根目录
+        for i, segment in enumerate(parts):
+            seg = segment.lower()
+            if seg == "wps office":
+                candidates.append("\\".join(parts[:i + 1]))
+            if seg == "kingsoft" and i + 1 < len(parts) and parts[i + 1].lower() == "wps office":
+                candidates.append("\\".join(parts[:i + 2]))
+
+        # 如果路径在 office6/wps/bin 等子目录，回退到上级目录
+        current = value
+        for _ in range(6):
+            tail = os.path.basename(current).lower()
+            if tail in {"office6", "wps", "bin"} or re.fullmatch(r"\d+(\.\d+)+", tail):
+                current = os.path.dirname(current)
+                if current:
+                    candidates.append(current)
+                continue
+            break
+
+        # 去重并仅保留绝对路径
+        unique_candidates = []
+        seen = set()
+        for item in candidates:
+            normalized = os.path.normpath(item)
+            if os.path.isabs(normalized) and normalized not in seen:
+                seen.add(normalized)
+                unique_candidates.append(normalized)
+
+        return unique_candidates
+
+    @staticmethod
+    def _get_wps_base_paths_from_shortcuts():
+        """从开始菜单和桌面快捷方式中提取WPS安装目录。"""
+        if os.name != "nt":
+            return []
+
+        shortcut_roots = []
+        for env_key, suffix in [
+            ("ProgramData", os.path.join("Microsoft", "Windows", "Start Menu", "Programs")),
+            ("APPDATA", os.path.join("Microsoft", "Windows", "Start Menu", "Programs")),
+            ("PUBLIC", "Desktop"),
+            ("USERPROFILE", "Desktop"),
+        ]:
+            base = os.environ.get(env_key, "")
+            if base:
+                folder = os.path.join(base, suffix)
+                if os.path.isdir(folder):
+                    shortcut_roots.append(folder)
+
+        paths = []
+        max_shortcuts_to_resolve = 20
+        resolved_count = 0
+        for root in shortcut_roots:
+            patterns = [
+                os.path.join(root, "**", "*WPS*.lnk"),
+                os.path.join(root, "**", "*Kingsoft*.lnk"),
+            ]
+
+            shortcut_candidates = []
+            for pattern in patterns:
+                shortcut_candidates.extend(glob.glob(pattern, recursive=True))
+
+            for shortcut_path in list(dict.fromkeys(shortcut_candidates)):
+                if resolved_count >= max_shortcuts_to_resolve:
+                    break
+
+                target_path = PathDetector._resolve_shortcut_target(shortcut_path)
+                if target_path:
+                    paths.extend(PathDetector._normalize_wps_base_paths(target_path))
+                resolved_count += 1
+
+            if resolved_count >= max_shortcuts_to_resolve:
+                break
+
+        return list(dict.fromkeys(paths))
+
+    @staticmethod
+    def _resolve_shortcut_target(shortcut_path):
+        """解析 .lnk 快捷方式目标路径。"""
+        command = [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "$shell = New-Object -ComObject WScript.Shell; "
+            "$lnk = $shell.CreateShortcut($args[0]); "
+            "if ($lnk.TargetPath) { Write-Output $lnk.TargetPath }",
+            shortcut_path,
+        ]
+
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=1,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return ""
+
+        if result.returncode != 0:
+            return ""
+
+        return result.stdout.strip()
+
+    @staticmethod
+    def _get_program_files_roots():
+        """获取系统中可能的 Program Files 根目录列表。"""
+        roots = []
+
+        # 优先使用系统环境变量，适配 Program Files 自定义安装位置
+        for env_key in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+            env_path = os.environ.get(env_key, "")
+            if env_path and os.path.isdir(env_path):
+                roots.append(env_path)
+
+        # 兜底扫描常见目录名，适配多盘符环境
+        for drive_letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+            for dir_name in ("Program Files", "Program Files (x86)"):
+                candidate = f"{drive_letter}:\\{dir_name}"
+                if os.path.isdir(candidate):
+                    roots.append(candidate)
+
+        return list(dict.fromkeys(roots))
     
     @staticmethod
     def _validate_wps_splash_dir(splash_dir):
-        """验证WPS splash目录是否包含必要的启动图文件
+        """验证WPS splash目录是否包含可替换的启动图文件
         
         Args:
             splash_dir: splash目录路径
@@ -428,36 +683,45 @@ class PathDetector:
         Returns:
             bool: 如果目录包含必要的文件则返回True
         """
-        required_files = [
+        root_files = PathDetector._collect_wps_splash_files_in_dir(splash_dir)
+        hdpi_dir = os.path.join(splash_dir, "hdpi")
+        hdpi_files = PathDetector._collect_wps_splash_files_in_dir(hdpi_dir)
+
+        # 兼容不同WPS版本目录结构：根目录或hdpi目录存在可替换文件即可
+        return bool(root_files or hdpi_files)
+
+    @staticmethod
+    def _is_wps_splash_filename(filename):
+        """判断文件名是否属于WPS可替换启动图。"""
+        name = filename.lower()
+        standard_names = {
             "splash_default_bg.png",
             "splash_sup_default_bg.png",
             "splash_wps365_default_bg.png",
-        ]
-        
-        hdpi_required_files = [
-            "hdpi/splash_default_bg.png",
-            "hdpi/splash_sup_default_bg.png",
-            "hdpi/splash_wps365_default_bg.png",
-        ]
-        
-        # 检查根目录下的文件
-        for filename in required_files:
-            file_path = os.path.join(splash_dir, filename)
-            if not os.path.exists(file_path):
-                return False
-        
-        # 检查hdpi目录下的文件
-        hdpi_dir = os.path.join(splash_dir, "hdpi")
-        if os.path.isdir(hdpi_dir):
-            for filename in hdpi_required_files:
-                file_path = os.path.join(splash_dir, filename)
-                if not os.path.exists(file_path):
-                    return False
-        else:
-            # 如果hdpi目录不存在，也认为无效
-            return False
-        
-        return True
+        }
+
+        if name in standard_names:
+            return True
+
+        # 支持企业版动态年份命名，例如 ent_background_2023_oem.png
+        return re.fullmatch(r"ent_background_\d{4}_(oem|default)\.png", name) is not None
+
+    @staticmethod
+    def _collect_wps_splash_files_in_dir(directory):
+        """收集目录内可替换的WPS启动图文件路径。"""
+        if not os.path.isdir(directory):
+            return []
+
+        files = []
+        try:
+            for entry in os.listdir(directory):
+                entry_path = os.path.join(directory, entry)
+                if os.path.isfile(entry_path) and PathDetector._is_wps_splash_filename(entry):
+                    files.append(entry_path)
+        except (PermissionError, OSError):
+            return []
+
+        return sorted(files)
     
     @staticmethod
     def get_wps_splash_files(splash_dir):
@@ -467,39 +731,13 @@ class PathDetector:
             splash_dir: splash目录路径
             
         Returns:
-            list: 包含6个文件路径的列表
+            list: 启动图文件路径列表
         """
         if not splash_dir or not os.path.exists(splash_dir):
             return []
-        
-        files = []
-        
-        # 根目录下的3个文件
-        root_files = [
-            "splash_default_bg.png",
-            "splash_sup_default_bg.png",
-            "splash_wps365_default_bg.png",
-        ]
-        
-        # hdpi目录下的3个文件
-        hdpi_files = [
-            "hdpi/splash_default_bg.png",
-            "hdpi/splash_sup_default_bg.png",
-            "hdpi/splash_wps365_default_bg.png",
-        ]
-        
-        # 添加根目录文件
-        for filename in root_files:
-            file_path = os.path.join(splash_dir, filename)
-            if os.path.exists(file_path):
-                files.append(file_path)
-        
-        # 添加hdpi目录文件
-        for filename in hdpi_files:
-            file_path = os.path.join(splash_dir, filename)
-            if os.path.exists(file_path):
-                files.append(file_path)
-        
+
+        files = PathDetector._collect_wps_splash_files_in_dir(splash_dir)
+        files.extend(PathDetector._collect_wps_splash_files_in_dir(os.path.join(splash_dir, "hdpi")))
         return files
     
     @staticmethod
@@ -568,13 +806,10 @@ class PathDetector:
                 "   或: C:\\Program Files\\Kingsoft\\WPS Office\\office6\\mui\\[语言]\\resource\\splash\\\n\n"
                 "3. Program Files (x86):\n"
                 "   C:\\Program Files (x86)\\Kingsoft\\WPS Office\\office6\\mui\\[语言]\\res\\splash\\\n\n"
-                "splash目录应包含以下文件:\n"
-                "- splash_default_bg.png\n"
-                "- splash_sup_default_bg.png\n"
-                "- splash_wps365_default_bg.png\n"
-                "- hdpi\\splash_default_bg.png\n"
-                "- hdpi\\splash_sup_default_bg.png\n"
-                "- hdpi\\splash_wps365_default_bg.png\n\n"
+                "splash目录需包含可替换的启动图文件，支持以下命名:\n"
+                "- 标准命名: splash_default_bg.png、splash_sup_default_bg.png、splash_wps365_default_bg.png\n"
+                "- 企业命名: ent_background_年份_oem.png、ent_background_年份_default.png\n"
+                "根目录或 hdpi 子目录存在可替换文件即可。\n\n"
                 "是否现在手动选择splash目录?"
             )
         else:
@@ -606,11 +841,17 @@ class PathDetector:
         
         # 设置初始目录为常见路径
         if app_type == "wps":
-            initial_dir = "C:\\Program Files\\Kingsoft\\WPS Office"
-            if not os.path.exists(initial_dir):
-                initial_dir = "C:\\Program Files (x86)\\Kingsoft\\WPS Office"
-            if not os.path.exists(initial_dir):
-                initial_dir = "C:\\Program Files\\WPS Office"
+            initial_dir = ""
+            for root in PathDetector._get_program_files_roots():
+                for candidate in (
+                    os.path.join(root, "Kingsoft", "WPS Office"),
+                    os.path.join(root, "WPS Office"),
+                ):
+                    if os.path.exists(candidate):
+                        initial_dir = candidate
+                        break
+                if initial_dir:
+                    break
             if not os.path.exists(initial_dir):
                 initial_dir = "C:\\"
         else:

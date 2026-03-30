@@ -463,6 +463,9 @@ class MainWindow(FluentWindow):
         if not target_paths:
             MessageHelper.show_warning(self, "未找到启动图文件", "请确保splash目录包含所有必要的启动图文件")
             return
+
+        if not self.permission_ctrl.ensure_admin_for_system_paths(self, target_paths, "替换启动图"):
+            return
         
         self.show_progress(f"正在替换 {len(target_paths)} 个文件...", "wps")
         success, msg, is_permission_error, success_count, failed_count = self.replacer.replace_multiple_images(
@@ -476,7 +479,12 @@ class MainWindow(FluentWindow):
             if success_count == len(target_paths):
                 MessageHelper.show_success(self, f"启动图片已替换为: {image_info['display_name']}\n成功替换 {success_count} 个文件", 4000)
             else:
-                MessageHelper.show_warning(self, f"部分替换成功\n{msg}", 5000)
+                MessageHelper.show_warning(self, "部分替换成功", msg, 5000)
+                if is_permission_error:
+                    self.permission_ctrl.handle_permission_error(
+                        self,
+                        "部分文件替换失败，可能需要管理员权限才能写入 Program Files 目录。"
+                    )
         elif is_permission_error:
             self.permission_ctrl.handle_permission_error(self, msg)
         else:
@@ -493,6 +501,9 @@ class MainWindow(FluentWindow):
         if not target_paths:
             MessageHelper.show_warning(self, "未找到启动图文件", "请确保splash目录包含所有必要的启动图文件")
             return
+
+        if not self.permission_ctrl.ensure_admin_for_system_paths(self, target_paths, "还原启动图"):
+            return
         
         self.show_progress(f"正在还原 {len(target_paths)} 个文件...", "wps")
         success, msg, is_permission_error, success_count, failed_count = self.replacer.restore_multiple_backups(target_paths)
@@ -502,7 +513,12 @@ class MainWindow(FluentWindow):
             if success_count == len(target_paths):
                 MessageHelper.show_success(self, f"已从备份还原启动图片\n成功还原 {success_count} 个文件", 4000)
             else:
-                MessageHelper.show_warning(self, f"部分还原成功\n{msg}", 5000)
+                MessageHelper.show_warning(self, "部分还原成功", msg, 5000)
+                if is_permission_error:
+                    self.permission_ctrl.handle_permission_error(
+                        self,
+                        "部分文件还原失败，可能需要管理员权限才能写入 Program Files 目录。"
+                    )
         elif is_permission_error:
             self.permission_ctrl.handle_permission_error(self, msg)
         else:
