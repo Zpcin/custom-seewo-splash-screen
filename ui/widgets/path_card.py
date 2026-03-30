@@ -65,12 +65,13 @@ class PathInfoCard(CardWidget):
         # 设置较长的显示时间，因为路径信息可能较长
         self.path_label.setToolTipDuration(5000)  # 5秒后自动消失
     
-    def update_path_display(self, path: str, file_count: int = None):
+    def update_path_display(self, path: str, file_count: int = None, file_label: str = "启动图"):
         """更新路径显示
         
         Args:
             path: 目标路径,空字符串表示未设置路径
-            file_count: 可选的文件数量（用于WPS页面显示）
+            file_count: 可选的文件数量（用于WPS/Logo页面显示）
+            file_label: 文件类型标签，如“启动图”或“Logo”
         """
         if path:
             # 缩短路径显示
@@ -88,7 +89,7 @@ class PathInfoCard(CardWidget):
             
             # 设置完整路径的工具提示
             if file_count is not None:
-                full_path_tooltip = f"完整路径:\n{path}\n\n包含 {file_count} 个启动图文件"
+                full_path_tooltip = f"完整路径:\n{path}\n\n包含 {file_count} 个{file_label}文件"
             else:
                 full_path_tooltip = f"完整路径:\n{path}"
             self._setup_path_label_tooltip(full_path_tooltip, ToolTipPosition.BOTTOM)

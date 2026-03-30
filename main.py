@@ -2,8 +2,14 @@ import sys
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
 from ui.main_window import MainWindow
+from utils.admin_helper import is_admin, run_as_admin
 
 def main():
+    # 默认启动时优先申请管理员权限（用户可取消）
+    if not is_admin():
+        if run_as_admin():
+            return
+
     # 在创建QApplication之前设置高DPI支持
     if hasattr(Qt, 'AA_EnableHighDpiScaling'):
         QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)

@@ -12,6 +12,7 @@ class ActionBar(QWidget):
     deleteClicked = pyqtSignal()
     replaceClicked = pyqtSignal()
     restoreClicked = pyqtSignal()
+    replaceLogoClicked = pyqtSignal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -29,7 +30,9 @@ class ActionBar(QWidget):
         self.rename_btn = PushButton(FIF.EDIT, "重命名")
         self.delete_btn = PushButton(FIF.DELETE, "删除")
         self.replace_btn = PrimaryPushButton(FIF.UPDATE, "替换启动图片")
+        self.replace_logo_btn = PushButton(FIF.PALETTE, "替换Logo")
         self.restore_btn = PushButton(FIF.SYNC, "从备份还原")
+        self.replace_logo_btn.setVisible(False)
         
         # 添加到布局
         layout.addWidget(self.import_btn)
@@ -37,6 +40,7 @@ class ActionBar(QWidget):
         layout.addWidget(self.delete_btn)
         layout.addStretch(1)
         layout.addWidget(self.restore_btn)
+        layout.addWidget(self.replace_logo_btn)
         layout.addWidget(self.replace_btn)
     
     def _connect_signals(self):
@@ -46,6 +50,7 @@ class ActionBar(QWidget):
         self.delete_btn.clicked.connect(self.deleteClicked.emit)
         self.replace_btn.clicked.connect(self.replaceClicked.emit)
         self.restore_btn.clicked.connect(self.restoreClicked.emit)
+        self.replace_logo_btn.clicked.connect(self.replaceLogoClicked.emit)
     
     def set_rename_delete_enabled(self, enabled: bool):
         """设置重命名和删除按钮的启用状态
@@ -55,3 +60,7 @@ class ActionBar(QWidget):
         """
         self.rename_btn.setEnabled(enabled)
         self.delete_btn.setEnabled(enabled)
+
+    def set_logo_replace_visible(self, visible: bool):
+        """设置 Logo 替换按钮显示状态。"""
+        self.replace_logo_btn.setVisible(visible)

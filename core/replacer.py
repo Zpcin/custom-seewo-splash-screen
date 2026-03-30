@@ -4,6 +4,7 @@ import os
 import shutil
 import stat
 import ctypes
+import hashlib
 from datetime import datetime
 
 
@@ -19,29 +20,48 @@ class ImageReplacer:
         """检查是否已存在备份"""
         if not target_path or not os.path.exists(target_path):
             return False
-        
+
         base_name = os.path.basename(target_path)
-        # 检查backups目录下是否有以该文件名开头的备份
+        name_without_ext = os.path.splitext(base_name)[0]
+        target_key = self._get_target_backup_key(target_path)
+
+        # 优先匹配带路径键的备份，避免同名文件冲突
         for filename in os.listdir(self.backup_dir):
-            if filename.startswith(os.path.splitext(base_name)[0] + "_"):
+            if filename.startswith(f"{name_without_ext}_{target_key}_"):
+                return True
+
+        # 兼容旧版仅按文件名备份的格式
+        for filename in os.listdir(self.backup_dir):
+            if filename.startswith(name_without_ext + "_"):
                 return True
         return False
+
+    def _get_target_backup_key(self, target_path):
+        """根据目标路径生成稳定的备份键，区分同名文件。"""
+        normalized = os.path.normcase(os.path.abspath(target_path))
+        return hashlib.md5(normalized.encode("utf-8")).hexdigest()[:10]
     
-    def backup_original(self, target_path):
-        """备份原始文件"""
+    def backup_original(self, target_path, always_backup=True):
+        """备份当前文件
+
+        Args:
+            target_path: 目标文件路径
+            always_backup: 是否每次都创建新备份
+        """
         if not os.path.exists(target_path):
             return False, "目标文件不存在", False
-        
-        # 检查是否已有备份
-        if self.has_backup(target_path):
+
+        # 兼容旧逻辑：仅在明确关闭 always_backup 时才跳过
+        if not always_backup and self.has_backup(target_path):
             return True, "检测到已有备份，跳过备份步骤", False
         
         try:
             # 生成备份文件名
             base_name = os.path.basename(target_path)
             name_without_ext = os.path.splitext(base_name)[0]
+            target_key = self._get_target_backup_key(target_path)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_filename = f"{name_without_ext}_{timestamp}.png"
+            backup_filename = f"{name_without_ext}_{target_key}_{timestamp}.png"
             backup_path = os.path.join(self.backup_dir, backup_filename)
             
             # 执行备份
@@ -231,7 +251,7 @@ class ImageReplacer:
         
         try:
             # 备份原始文件
-            backup_success, backup_msg, backup_perm_error = self.backup_original(target_path)
+            backup_success, backup_msg, backup_perm_error = self.backup_original(target_path, always_backup=True)
             if not backup_success and not self.has_backup(target_path):
                 return False, backup_msg, backup_perm_error
             
@@ -358,12 +378,23 @@ class ImageReplacer:
         # 查找备份文件
         base_name = os.path.basename(target_path)
         name_without_ext = os.path.splitext(base_name)[0]
+        target_key = self._get_target_backup_key(target_path)
         
-        backup_file = None
+        keyed_backup_files = []
         for filename in os.listdir(self.backup_dir):
-            if filename.startswith(name_without_ext + "_"):
-                backup_file = filename
-                break
+            if filename.startswith(f"{name_without_ext}_{target_key}_"):
+                keyed_backup_files.append(filename)
+
+        backup_file = None
+        if keyed_backup_files:
+            # 选择最新备份
+            backup_file = sorted(keyed_backup_files, reverse=True)[0]
+        else:
+            # 兼容旧版备份格式
+            for filename in os.listdir(self.backup_dir):
+                if filename.startswith(name_without_ext + "_"):
+                    backup_file = filename
+                    break
         
         if not backup_file:
             return False, "未找到备份文件", False

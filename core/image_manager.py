@@ -61,6 +61,10 @@ class ImageManager:
             }
         
         for img_file in preset_dir.glob("*.png"):
+            if page == "wps" and "logo" in img_file.name.lower():
+                # Logo 示例图仅用于 Logo 页面，不在启动图替换页显示
+                continue
+
             display_name = preset_names.get(img_file.name, img_file.stem)
             preset_images.append({
                 "filename": img_file.name,
@@ -71,9 +75,43 @@ class ImageManager:
             print(f"[DEBUG] 找到预设图片: {img_file.name}")
         
         return sorted(preset_images, key=lambda x: x["filename"])
+
+    def get_logo_preset_images(self):
+        """获取 Logo 资源列表（仅显示 logo 相关预设文件）"""
+        logo_images = []
+
+        if not self.wps_preset_dir.exists():
+            return logo_images
+
+        for img_file in self.wps_preset_dir.glob("*.png"):
+            if "logo" not in img_file.name.lower():
+                continue
+
+            display_name = "默认Logo示例" if img_file.name == "logo_default_example.png" else img_file.stem
+            logo_images.append({
+                "filename": img_file.name,
+                "display_name": display_name,
+                "path": str(img_file),
+                "type": "preset"
+            })
+
+        return sorted(logo_images, key=lambda x: x["filename"])
+
+    def get_logo_images(self):
+        """获取 Logo 页面可用图片（logo 预设 + 自定义导入）。"""
+        preset_images = self.get_logo_preset_images()
+        custom_images = self.get_custom_images(mode="logo")
+        return preset_images, custom_images
     
-    def get_custom_images(self):
-        """获取自定义图片列表"""
+    def get_custom_images(self, mode="all"):
+        """获取自定义图片列表
+
+        Args:
+            mode: all|startup|logo
+                all: 所有自定义图片
+                startup: 启动图页面可见（排除 logo 专用）
+                logo: Logo 页面可见（仅 logo 专用）
+        """
         custom_images = []
         
         if not self.custom_dir.exists():
@@ -84,8 +122,15 @@ class ImageManager:
         # 从配置读取自定义图片的显示名称
         config_custom_images = self.config_manager.get_custom_images()
         name_map = {img["filename"]: img["display_name"] for img in config_custom_images}
+        logo_custom_images = set(self.config_manager.get_logo_custom_images())
         
         for img_file in self.custom_dir.glob("*.png"):
+            is_logo_custom = img_file.name in logo_custom_images
+            if mode == "startup" and is_logo_custom:
+                continue
+            if mode == "logo" and not is_logo_custom:
+                continue
+
             display_name = name_map.get(img_file.name, img_file.stem)
             custom_images.append({
                 "filename": img_file.name,

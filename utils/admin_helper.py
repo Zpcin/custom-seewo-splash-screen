@@ -21,12 +21,13 @@ def run_as_admin():
         bool: 是否成功请求重启
     """
     try:
+        result = 0
         if sys.argv[0].endswith('.py'):
             # 如果是Python脚本
             script_path = os.path.abspath(sys.argv[0])
             params = ' '.join([f'"{arg}"' for arg in sys.argv[1:]])
             
-            ctypes.windll.shell32.ShellExecuteW(
+            result = ctypes.windll.shell32.ShellExecuteW(
                 None, 
                 "runas", 
                 sys.executable,
@@ -39,7 +40,7 @@ def run_as_admin():
             exe_path = sys.executable
             params = ' '.join([f'"{arg}"' for arg in sys.argv[1:]])
             
-            ctypes.windll.shell32.ShellExecuteW(
+            result = ctypes.windll.shell32.ShellExecuteW(
                 None,
                 "runas",
                 exe_path,
@@ -47,7 +48,9 @@ def run_as_admin():
                 None,
                 1
             )
-        return True
+
+        # ShellExecuteW 返回值 <= 32 表示失败或用户取消UAC
+        return result > 32
     except Exception as e:
         print(f"请求管理员权限失败: {e}")
         return False

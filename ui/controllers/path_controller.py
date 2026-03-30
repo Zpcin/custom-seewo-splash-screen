@@ -69,6 +69,16 @@ class PathController:
             if self.target_path and os.path.isfile(self.target_path):
                 return [self.target_path]
             return []
+
+    def get_logo_target_paths(self):
+        """获取 WPS logo 目标路径列表。"""
+        if self.page != "wps":
+            return []
+
+        if self.target_path and os.path.isdir(self.target_path):
+            return PathDetector.get_wps_logo_files(self.target_path)
+
+        return []
     
     def load_and_validate_target_path(self) -> tuple[bool, str]:
         """加载并验证目标路径（静默模式）

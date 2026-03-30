@@ -1,10 +1,10 @@
 """主窗口 - 只负责UI组装和事件分发"""
 
 import os
-from PyQt5.QtWidgets import QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget, QTextEdit, QApplication, QFileDialog
 from PyQt5.QtGui import QIcon
-from PyQt5.QtCore import QTimer, QSize
-from qfluentwidgets import FluentWindow, FluentIcon as FIF, IndeterminateProgressBar, NavigationItemPosition, SystemThemeListener, SplashScreen
+from PyQt5.QtCore import QTimer, QSize, QEvent
+from qfluentwidgets import FluentWindow, FluentIcon as FIF, IndeterminateProgressBar, NavigationItemPosition, SystemThemeListener, SplashScreen, PrimaryPushButton, PushButton, CaptionLabel, MessageBoxBase, SubtitleLabel, ComboBox, BodyLabel
 
 from core.config_manager import ConfigManager
 from core.image_manager import ImageManager
@@ -15,6 +15,37 @@ from .widgets import PathInfoCard, ImageListWidget, ActionBar
 from .dialogs import MessageHelper
 from .controllers import PathController, ImageController, PermissionController
 from .settings import SettingsInterface
+
+
+class LogoRefreshTriggerDialog(MessageBoxBase):
+    """Logo 替换后启动图触发选择对话框。"""
+
+    def __init__(self, candidates: list, used_filenames: set, parent=None):
+        super().__init__(parent)
+        self.candidates = candidates
+
+        self.titleLabel = SubtitleLabel("选择触发启动图")
+        self.infoLabel = BodyLabel(
+            "为使 Logo 更新生效，请手动选择一张启动图执行触发替换。\n"
+            "标记“[已用]”表示该图片此前已经用于触发。"
+        )
+        self.comboBox = ComboBox()
+
+        for image in candidates:
+            display_text = image["display_name"]
+            self.comboBox.addItem(display_text, userData=image)
+
+        self.viewLayout.addWidget(self.titleLabel)
+        self.viewLayout.addWidget(self.infoLabel)
+        self.viewLayout.addWidget(self.comboBox)
+
+        self.widget.setMinimumWidth(500)
+        self.yesButton.setText("执行触发")
+        self.cancelButton.setText("跳过")
+
+    def get_selected_trigger_image(self):
+        """获取当前选中的触发图片信息。"""
+        return self.comboBox.currentData()
 
 
 class MainWindow(FluentWindow):
@@ -28,6 +59,10 @@ class MainWindow(FluentWindow):
         self._init_ui()
         self._init_settings_interface()
         self._connect_signals()
+        self._logo_card_base_text = ""
+
+        # 监听全局点击，实现 Logo 路径列表“点击外部自动收起”
+        QApplication.instance().installEventFilter(self)
         
         # 创建系统主题监听器
         self.themeListener = SystemThemeListener(self)
@@ -40,7 +75,6 @@ class MainWindow(FluentWindow):
         self.show()
         
         # 处理事件队列以显示启动屏幕
-        from PyQt5.QtWidgets import QApplication
         QApplication.processEvents()
         
         # 启动系统主题监听
@@ -122,6 +156,60 @@ class MainWindow(FluentWindow):
         wps_layout.addWidget(self.wps_image_list, 1)
         wps_layout.addWidget(self.wps_action_bar)
         wps_layout.addWidget(self.wps_progress_bar)
+
+        # Logo 页面（独立资源与替换逻辑）
+        self.logoInterface = QWidget()
+        self.logoInterface.setObjectName("logoInterface")
+        self.addSubInterface(self.logoInterface, FIF.PALETTE, 'WPS Logo')
+
+        logo_layout = QVBoxLayout(self.logoInterface)
+        logo_layout.setContentsMargins(20, 20, 20, 20)
+        logo_layout.setSpacing(15)
+
+        self.logo_path_card = PathInfoCard(self.logoInterface)
+        self.logo_path_list_title = CaptionLabel("Logo 目标路径列表")
+        self.logo_path_list = QTextEdit(self.logoInterface)
+        self.logo_path_list.setReadOnly(True)
+        self.logo_path_list.setPlaceholderText("检测到路径后，这里会列出所有 Logo 文件位置")
+        self.logo_path_list.setFixedHeight(120)
+        self.logo_path_list.setStyleSheet("""
+            QTextEdit {
+                border: 1px solid rgba(0, 0, 0, 0.08);
+                border-radius: 10px;
+                background: rgba(255, 255, 255, 0.88);
+                padding: 10px 12px;
+                font-family: Consolas, "Microsoft YaHei UI";
+                font-size: 12px;
+                line-height: 1.4;
+            }
+        """)
+        self.logo_image_list = ImageListWidget(self.logoInterface)
+        self.logo_action_row = QWidget(self.logoInterface)
+        self.logo_action_layout = QHBoxLayout(self.logo_action_row)
+        self.logo_action_layout.setContentsMargins(0, 0, 0, 0)
+        self.logo_action_layout.setSpacing(10)
+        self.logo_import_btn = PushButton(FIF.ADD, "导入Logo")
+        self.logo_delete_btn = PushButton(FIF.DELETE, "删除Logo")
+        self.logo_restore_btn = PushButton(FIF.SYNC, "从备份还原Logo")
+        self.logo_replace_btn = PrimaryPushButton(FIF.UPDATE, "替换Logo")
+        self.logo_action_layout.addWidget(self.logo_import_btn)
+        self.logo_action_layout.addWidget(self.logo_delete_btn)
+        self.logo_action_layout.addWidget(self.logo_restore_btn)
+        self.logo_action_layout.addStretch(1)
+        self.logo_action_layout.addWidget(self.logo_replace_btn)
+        self.logo_progress_bar = IndeterminateProgressBar(self.logoInterface)
+        self.logo_progress_bar.setVisible(False)
+
+        # 默认折叠，点击路径卡后展开
+        self.logo_path_list_title.setVisible(False)
+        self.logo_path_list.setVisible(False)
+
+        logo_layout.addWidget(self.logo_path_card)
+        logo_layout.addWidget(self.logo_path_list_title)
+        logo_layout.addWidget(self.logo_path_list)
+        logo_layout.addWidget(self.logo_image_list, 1)
+        logo_layout.addWidget(self.logo_action_row)
+        logo_layout.addWidget(self.logo_progress_bar)
     
     def _init_settings_interface(self):
         """初始化设置界面"""
@@ -147,6 +235,7 @@ class MainWindow(FluentWindow):
         self.action_bar.deleteClicked.connect(self._on_delete_image)
         self.action_bar.replaceClicked.connect(self._on_replace_image)
         self.action_bar.restoreClicked.connect(self._on_restore_backup)
+        self.action_bar.set_logo_replace_visible(False)
         
         # WPS页面信号
         self.wps_path_card.detect_button.clicked.connect(self._on_wps_detect_path)
@@ -158,6 +247,18 @@ class MainWindow(FluentWindow):
         self.wps_action_bar.deleteClicked.connect(self._on_wps_delete_image)
         self.wps_action_bar.replaceClicked.connect(self._on_wps_replace_image)
         self.wps_action_bar.restoreClicked.connect(self._on_wps_restore_backup)
+        self.wps_action_bar.replaceLogoClicked.connect(self._goto_logo_page)
+        self.wps_action_bar.set_logo_replace_visible(True)
+
+        # Logo 页面信号
+        self.logo_path_card.detect_button.clicked.connect(self._on_logo_detect_path)
+        self.logo_path_card.history_button.clicked.connect(self._on_logo_show_history)
+        self.logo_path_card.clicked.connect(self._on_logo_path_card_clicked)
+        self.logo_image_list.imageSelected.connect(self._on_logo_image_selected)
+        self.logo_import_btn.clicked.connect(self._on_logo_import_image)
+        self.logo_delete_btn.clicked.connect(self._on_logo_delete_image)
+        self.logo_restore_btn.clicked.connect(self._on_wps_restore_logo_backup)
+        self.logo_replace_btn.clicked.connect(self._on_wps_replace_logo)
     
     def _load_initial_data(self):
         """加载初始数据"""
@@ -172,14 +273,13 @@ class MainWindow(FluentWindow):
         
         # 加载WPS页面数据
         self.load_wps_images()
+        self.load_logo_images()
         wps_success, wps_message = self.wps_path_ctrl.load_and_validate_target_path()
         if wps_success:
-            target_paths = self.wps_path_ctrl.get_target_paths()
-            file_count = len(target_paths) if target_paths else None
-            self.wps_path_card.update_path_display(self.wps_path_ctrl.target_path, file_count)
+            self._update_wps_related_path_cards()
             MessageHelper.show_success(self, wps_message, 3000)
         else:
-            self.wps_path_card.update_path_display("")
+            self._update_wps_related_path_cards()
         
         # 启动屏幕加载完成
         if hasattr(self, 'splashScreen'):
@@ -204,6 +304,77 @@ class MainWindow(FluentWindow):
         self.config_manager.set_last_selected_image(image_info["filename"], "wps")
         is_custom = image_info["type"] == "custom"
         self.wps_action_bar.set_rename_delete_enabled(is_custom)
+
+    def _on_logo_image_selected(self, image_info: dict):
+        """Logo页面图片选中事件"""
+        pass
+
+    def _on_logo_import_image(self):
+        """Logo 页面导入图片事件。"""
+        try:
+            file_paths, _ = QFileDialog.getOpenFileNames(
+                self,
+                "选择Logo图片",
+                os.path.expanduser("~"),
+                "PNG图片 (*.png)"
+            )
+
+            if not file_paths:
+                return
+
+            success_count = 0
+            failed_files = []
+            first_import_name = ""
+
+            for file_path in file_paths:
+                success, result = self.image_manager.import_image(file_path)
+                if success:
+                    imported_filename = os.path.basename(result)
+                    if not first_import_name:
+                        first_import_name = imported_filename
+                    self.config_manager.add_logo_custom_image(imported_filename)
+                    success_count += 1
+                else:
+                    failed_files.append((os.path.basename(file_path), result))
+
+            if success_count > 0:
+                tip = f"成功导入 {success_count} 个Logo"
+                if first_import_name:
+                    tip += f"（示例: {first_import_name}）"
+                if failed_files:
+                    tip += f"，{len(failed_files)} 个失败"
+                MessageHelper.show_success(self, tip, 3500)
+                self.load_logo_images()
+                self.load_wps_images()
+                self.load_images()
+
+            if failed_files:
+                error_details = "\n".join([f"• {name}: {reason}" for name, reason in failed_files[:5]])
+                if len(failed_files) > 5:
+                    error_details += f"\n... 还有 {len(failed_files) - 5} 个文件失败"
+                MessageHelper.show_error(self, "部分Logo导入失败", error_details)
+        except Exception as e:
+            MessageHelper.show_error(self, "Logo导入异常", str(e))
+
+    def _on_logo_delete_image(self):
+        """Logo 页面删除图片事件。"""
+        image_info = self.logo_image_list.get_selected_image_info()
+        if not image_info:
+            MessageHelper.show_warning(self, "未选择图片", "请先选择要删除的 Logo 图片")
+            return
+
+        if image_info.get("type") != "custom":
+            MessageHelper.show_warning(self, "不可删除", "预设 Logo 资源不可删除")
+            return
+
+        success, msg = self.wps_image_ctrl.delete_image(image_info)
+        if success:
+            self.config_manager.remove_logo_custom_image(image_info["filename"])
+            MessageHelper.show_success(self, msg, 2500)
+            self.load_logo_images()
+            self.load_wps_images()
+        else:
+            MessageHelper.show_error(self, "删除失败", msg)
     
     def _on_images_dropped(self, drop_data):
         """图片拖放事件"""
@@ -386,26 +557,30 @@ class MainWindow(FluentWindow):
         self.show_progress("正在检测路径...", "wps")
         success, message = self.wps_path_ctrl.detect_with_user_interaction()
         self.hide_progress("wps")
-        
-        target_paths = self.wps_path_ctrl.get_target_paths()
-        file_count = len(target_paths) if target_paths else None
-        self.wps_path_card.update_path_display(self.wps_path_ctrl.target_path, file_count)
+
+        self._update_wps_related_path_cards()
         if success:
             MessageHelper.show_success(self, message, 5000)
         elif message:
             MessageHelper.show_error(self, "检测失败", message)
+
+    def _on_logo_detect_path(self):
+        """Logo页面检测路径事件"""
+        self._on_wps_detect_path()
     
     def _on_wps_show_history(self):
         """WPS页面显示历史路径事件"""
         success, result, need_detect = self.wps_path_ctrl.select_from_history()
         if success:
             self.wps_path_ctrl.target_path = result
-            target_paths = self.wps_path_ctrl.get_target_paths()
-            file_count = len(target_paths) if target_paths else None
-            self.wps_path_card.update_path_display(result, file_count)
+            self._update_wps_related_path_cards()
             MessageHelper.show_success(self, f"已设置目标路径: {os.path.basename(result)}", 5000)
         elif need_detect:
             self._on_wps_detect_path()
+
+    def _on_logo_show_history(self):
+        """Logo页面显示历史路径事件"""
+        self._on_wps_show_history()
     
     def _on_wps_import_image(self):
         """WPS页面导入图片事件"""
@@ -523,6 +698,197 @@ class MainWindow(FluentWindow):
             self.permission_ctrl.handle_permission_error(self, msg)
         else:
             MessageHelper.show_error(self, "还原失败", msg)
+
+    def _goto_logo_page(self):
+        """从 WPS 页面跳转到 Logo 页面。"""
+        self.switchTo(self.logoInterface)
+
+    def _on_wps_replace_logo(self):
+        """WPS页面单独替换 Logo 事件"""
+        if not self.wps_path_ctrl.target_path:
+            MessageHelper.show_warning(self, "未检测到路径", "请先点击'检测路径'按钮")
+            return
+
+        image_info = self.logo_image_list.get_selected_image_info()
+        if not image_info:
+            MessageHelper.show_warning(self, "未选择Logo资源", "请先在 Logo 页面选择一个资源图片")
+            return
+
+        logo_paths = self.wps_path_ctrl.get_logo_target_paths()
+        if not logo_paths:
+            MessageHelper.show_warning(self, "未找到Logo文件", "当前 WPS 目录未检测到可替换的 companylogo.png")
+            return
+
+        startup_targets = self.wps_path_ctrl.get_target_paths()
+        precheck_paths = list(dict.fromkeys(logo_paths + startup_targets[:1]))
+        if not self.permission_ctrl.ensure_admin_for_system_paths(self, precheck_paths, "替换 Logo"):
+            return
+
+        self.show_progress(f"正在替换 {len(logo_paths)} 个Logo文件...", "logo")
+        success, msg, is_permission_error, success_count, failed_count = self.replacer.replace_multiple_images(
+            image_info["path"],
+            logo_paths,
+            self.config_manager
+        )
+        self.hide_progress("logo")
+
+        source_name = image_info["display_name"]
+        if success:
+            if success_count == len(logo_paths):
+                trigger_ok, trigger_msg = self._apply_logo_refresh_trigger_after_replace()
+                msg = f"Logo已替换为: {source_name}\n成功替换 {success_count} 个文件"
+                if trigger_msg:
+                    msg += f"\n{trigger_msg}"
+                if trigger_ok:
+                    MessageHelper.show_success(self, msg, 5000)
+                else:
+                    MessageHelper.show_warning(self, "Logo替换完成（触发未完成）", msg, 6000)
+            else:
+                MessageHelper.show_warning(self, "Logo部分替换成功", msg, 5000)
+                if is_permission_error:
+                    self.permission_ctrl.handle_permission_error(
+                        self,
+                        "部分 Logo 文件替换失败，可能需要管理员权限才能写入 Program Files 目录。"
+                    )
+        elif is_permission_error:
+            self.permission_ctrl.handle_permission_error(self, msg)
+        else:
+            MessageHelper.show_error(self, "Logo替换失败", msg)
+
+    def _on_wps_restore_logo_backup(self):
+        """Logo 页面从备份还原 Logo 事件。"""
+        if not self.wps_path_ctrl.target_path:
+            MessageHelper.show_warning(self, "未检测到路径", "请先点击'检测路径'按钮")
+            return
+
+        logo_paths = self.wps_path_ctrl.get_logo_target_paths()
+        if not logo_paths:
+            MessageHelper.show_warning(self, "未找到Logo文件", "当前 WPS 目录未检测到可还原的 companylogo.png")
+            return
+
+        if not self.permission_ctrl.ensure_admin_for_system_paths(self, logo_paths, "还原 Logo"):
+            return
+
+        self.show_progress(f"正在还原 {len(logo_paths)} 个Logo文件...", "logo")
+        success, msg, is_permission_error, success_count, failed_count = self.replacer.restore_multiple_backups(logo_paths)
+        self.hide_progress("logo")
+
+        if success:
+            if success_count == len(logo_paths):
+                MessageHelper.show_success(self, f"已从备份还原Logo\n成功还原 {success_count} 个文件", 4000)
+            else:
+                MessageHelper.show_warning(self, "Logo部分还原成功", msg, 5000)
+                if is_permission_error:
+                    self.permission_ctrl.handle_permission_error(
+                        self,
+                        "部分 Logo 文件还原失败，可能需要管理员权限才能写入 Program Files 目录。"
+                    )
+        elif is_permission_error:
+            self.permission_ctrl.handle_permission_error(self, msg)
+        else:
+            MessageHelper.show_error(self, "Logo还原失败", msg)
+
+    def _apply_logo_refresh_trigger_after_replace(self):
+        """Logo 替换后，手动选择启动图触发一次刷新。"""
+        startup_targets = self.wps_path_ctrl.get_target_paths()
+        if not startup_targets:
+            return False, "未找到可用于触发刷新的启动图目标文件"
+
+        # 仅使用非 logo 的 WPS 预设图作为触发源
+        preset_images = self.image_manager.get_preset_images("wps")
+        trigger_candidates = [
+            image for image in preset_images
+            if "logo" not in image["filename"].lower()
+        ]
+
+        if not trigger_candidates:
+            return False, "未找到可用于触发的启动图预设"
+
+        used_filenames = set(self.config_manager.get_wps_logo_trigger_used_images())
+
+        dialog = LogoRefreshTriggerDialog(trigger_candidates, used_filenames, self)
+        if not dialog.exec():
+            return True, "已跳过启动图触发步骤"
+
+        selected_trigger = dialog.get_selected_trigger_image()
+        if not selected_trigger:
+            return True, "未选择触发图，已跳过启动图触发步骤"
+
+        trigger_target = startup_targets[0]
+        trigger_success, trigger_msg, is_permission_error = self.replacer.replace_image(
+            selected_trigger["path"],
+            trigger_target,
+            self.config_manager
+        )
+
+        if not trigger_success:
+            if is_permission_error:
+                self.permission_ctrl.handle_permission_error(self, "触发启动图刷新时权限不足")
+            return False, f"触发失败：{trigger_msg}"
+
+        self.config_manager.add_wps_logo_trigger_used_image(selected_trigger["filename"])
+        return True, f"已自动触发刷新：{selected_trigger['display_name']}"
+
+    def _update_wps_related_path_cards(self):
+        """同步更新 WPS 启动图页与 Logo 页的路径显示。"""
+        target_path = self.wps_path_ctrl.target_path
+        if not target_path:
+            self.wps_path_card.update_path_display("")
+            self.logo_path_card.update_path_display("")
+            self._logo_card_base_text = self.logo_path_card.path_label.text()
+            self._set_logo_path_list_visible(False)
+            self.logo_path_list.setPlainText("")
+            return
+
+        splash_paths = self.wps_path_ctrl.get_target_paths()
+        splash_count = len(splash_paths)
+        logo_paths = self.wps_path_ctrl.get_logo_target_paths()
+        logo_count = len(logo_paths)
+
+        self.wps_path_card.update_path_display(target_path, splash_count)
+        if logo_paths:
+            self.logo_path_card.update_path_display(logo_paths[0], logo_count, "Logo")
+            self._logo_card_base_text = self.logo_path_card.path_label.text()
+            self._set_logo_path_list_visible(self.logo_path_list.isVisible())
+            self.logo_path_list.setPlainText("\n".join(logo_paths))
+        else:
+            self.logo_path_card.update_path_display("", 0, "Logo")
+            self._logo_card_base_text = self.logo_path_card.path_label.text()
+            self._set_logo_path_list_visible(False)
+            self.logo_path_list.setPlainText("未检测到 Logo 目标文件")
+
+    def _on_logo_path_card_clicked(self):
+        """点击 Logo 路径卡时展开路径列表。"""
+        self._set_logo_path_list_visible(True)
+
+    def _set_logo_path_list_visible(self, visible: bool):
+        """设置 Logo 路径小列表显示状态。"""
+        self.logo_path_list_title.setVisible(visible)
+        self.logo_path_list.setVisible(visible)
+
+        if self._logo_card_base_text:
+            arrow = "▲" if visible else "▼"
+            self.logo_path_card.path_label.setText(f"{self._logo_card_base_text}  {arrow}")
+
+    def _is_widget_in_container(self, widget, container):
+        """判断控件是否位于指定容器内。"""
+        current = widget
+        while isinstance(current, QWidget):
+            if current is container:
+                return True
+            current = current.parentWidget()
+        return False
+
+    def eventFilter(self, obj, event):
+        """全局点击处理：点击外部时收起 Logo 路径列表。"""
+        if event.type() == QEvent.Type.MouseButtonPress and hasattr(self, "logo_path_list"):
+            if self.logo_path_list.isVisible() and isinstance(obj, QWidget):
+                clicked_in_path_card = self._is_widget_in_container(obj, self.logo_path_card)
+                clicked_in_path_list = self._is_widget_in_container(obj, self.logo_path_list)
+                if not clicked_in_path_card and not clicked_in_path_list:
+                    self._set_logo_path_list_visible(False)
+
+        return super().eventFilter(obj, event)
     
     # === 辅助方法 ===
     
@@ -531,6 +897,9 @@ class MainWindow(FluentWindow):
         if page == "wps":
             self.wps_progress_bar.setVisible(True)
             self.wps_progress_bar.start()
+        elif page == "logo":
+            self.logo_progress_bar.setVisible(True)
+            self.logo_progress_bar.start()
         else:
             self.progress_bar.setVisible(True)
             self.progress_bar.start()
@@ -541,6 +910,9 @@ class MainWindow(FluentWindow):
         if page == "wps":
             self.wps_progress_bar.stop()
             self.wps_progress_bar.setVisible(False)
+        elif page == "logo":
+            self.logo_progress_bar.stop()
+            self.logo_progress_bar.setVisible(False)
         else:
             self.progress_bar.stop()
             self.progress_bar.setVisible(False)
@@ -548,7 +920,11 @@ class MainWindow(FluentWindow):
     def load_images(self):
         """加载图片列表"""
         preset_images = self.image_manager.get_preset_images("home")
-        custom_images = self.image_manager.get_custom_images()
+        logo_custom_set = set(self.config_manager.get_logo_custom_images())
+        custom_images = [
+            img for img in self.image_manager.get_custom_images(mode="all")
+            if img["filename"] not in logo_custom_set and "logo" not in img["filename"].lower()
+        ]
         self.image_list.load_images(preset_images, custom_images)
         
         last_selected = self.config_manager.get_last_selected_image("home")
@@ -558,12 +934,31 @@ class MainWindow(FluentWindow):
     def load_wps_images(self):
         """加载WPS页面图片列表"""
         preset_images = self.image_manager.get_preset_images("wps")
-        custom_images = self.image_manager.get_custom_images()
+        logo_custom_set = set(self.config_manager.get_logo_custom_images())
+        custom_images = [
+            img for img in self.image_manager.get_custom_images(mode="all")
+            if img["filename"] not in logo_custom_set and "logo" not in img["filename"].lower()
+        ]
         self.wps_image_list.load_images(preset_images, custom_images)
         
         last_selected = self.config_manager.get_last_selected_image("wps")
         if last_selected:
             self.wps_image_list.select_image_by_filename(last_selected)
+
+    def load_logo_images(self):
+        """加载 Logo 页面资源（仅 Logo）。"""
+        preset_images = self.image_manager.get_logo_preset_images()
+        logo_custom_set = set(self.config_manager.get_logo_custom_images())
+        custom_images = [
+            img for img in self.image_manager.get_custom_images(mode="all")
+            if img["filename"] in logo_custom_set or "logo" in img["filename"].lower()
+        ]
+        self.logo_image_list.load_images(preset_images, custom_images)
+
+        if preset_images:
+            self.logo_image_list.select_image_by_filename(preset_images[0]["filename"])
+        elif custom_images:
+            self.logo_image_list.select_image_by_filename(custom_images[0]["filename"])
 
     def center_window(self):
         """将窗口移动到屏幕中心"""
@@ -585,5 +980,9 @@ class MainWindow(FluentWindow):
         if hasattr(self, 'themeListener'):
             self.themeListener.terminate()
             self.themeListener.deleteLater()
+
+        app = QApplication.instance()
+        if app:
+            app.removeEventFilter(self)
         
         super().closeEvent(e)

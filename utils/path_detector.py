@@ -737,7 +737,7 @@ class PathDetector:
     
     @staticmethod
     def get_wps_splash_files(splash_dir):
-        """获取WPS splash目录下的所有启动图文件路径
+        """获取WPS splash目录下的启动图文件路径（不包含 OEM logo）
         
         Args:
             splash_dir: splash目录路径
@@ -750,7 +750,53 @@ class PathDetector:
 
         files = PathDetector._collect_wps_splash_files_in_dir(splash_dir)
         files.extend(PathDetector._collect_wps_splash_files_in_dir(os.path.join(splash_dir, "hdpi")))
-        return files
+        return list(dict.fromkeys(files))
+
+    @staticmethod
+    def get_wps_logo_files(splash_dir):
+        """获取WPS OEM logo文件路径（与启动图替换逻辑分离）。"""
+        if not splash_dir or not os.path.exists(splash_dir):
+            return []
+
+        return PathDetector._collect_wps_oem_logo_files(splash_dir)
+
+    @staticmethod
+    def _collect_wps_oem_logo_files(splash_dir):
+        """收集WPS版本目录下可替换的 companylogo 文件。"""
+        version_root = PathDetector._get_wps_version_root_from_splash_dir(splash_dir)
+        if not version_root:
+            return []
+
+        candidates = [
+            os.path.join(version_root, "oem", "companylogo.png"),
+            os.path.join(version_root, "utility", "backup", "OemFile", "oem", "companylogo.png"),
+        ]
+
+        existing_files = []
+        for path in candidates:
+            if os.path.isfile(path):
+                existing_files.append(path)
+
+        return existing_files
+
+    @staticmethod
+    def _get_wps_version_root_from_splash_dir(splash_dir):
+        """根据 splash 目录反推出 WPS 版本根目录。"""
+        current = os.path.normpath(splash_dir)
+
+        # 沿父目录回溯，定位到 office6 目录
+        while True:
+            tail = os.path.basename(current).lower()
+            if tail == "office6":
+                break
+
+            parent = os.path.dirname(current)
+            if not parent or parent == current:
+                return ""
+            current = parent
+
+        # office6 的上一级通常是版本目录（或 WPS Office 根目录）
+        return os.path.dirname(current)
     
     @staticmethod
     def detect_all_wps_paths():

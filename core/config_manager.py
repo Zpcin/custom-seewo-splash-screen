@@ -64,6 +64,8 @@ class ConfigManager:
             "mica_effect": True,  # 云母效果（默认开启）
             "file_protection_enabled": False  # 文件保护功能（默认关闭）
             ,"protected_files": []
+            ,"wps_logo_trigger_used_images": []
+            ,"logo_custom_images": []
         }
     
     def get_target_path(self, page="home"):
@@ -266,6 +268,8 @@ class ConfigManager:
                 img for img in self.config["custom_images"] 
                 if img.get("filename") != filename
             ]
+            if "logo_custom_images" in self.config and filename in self.config["logo_custom_images"]:
+                self.config["logo_custom_images"].remove(filename)
             self.save()
     
     def update_custom_image_name(self, old_filename, new_display_name, new_filename):
@@ -276,6 +280,11 @@ class ConfigManager:
                     img["display_name"] = new_display_name
                     img["filename"] = new_filename
                     break
+
+            if "logo_custom_images" in self.config and old_filename in self.config["logo_custom_images"]:
+                self.config["logo_custom_images"].remove(old_filename)
+                if new_filename not in self.config["logo_custom_images"]:
+                    self.config["logo_custom_images"].append(new_filename)
             self.save()
 
     def get_file_protection_enabled(self):
@@ -332,6 +341,56 @@ class ConfigManager:
         except Exception as e:
             print(f"导入设置失败: {e}")
             return False
+
+    def get_wps_logo_trigger_used_images(self):
+        """获取已用于 Logo 刷新触发的启动图文件名列表。"""
+        return self.config.get("wps_logo_trigger_used_images", [])
+
+    def add_wps_logo_trigger_used_image(self, filename):
+        """记录一次已使用的 Logo 刷新触发启动图。"""
+        if not filename:
+            return
+
+        if "wps_logo_trigger_used_images" not in self.config:
+            self.config["wps_logo_trigger_used_images"] = []
+
+        used = self.config["wps_logo_trigger_used_images"]
+        if filename in used:
+            used.remove(filename)
+        used.append(filename)
+        self.save()
+
+    def clear_wps_logo_trigger_used_images(self):
+        """清空 Logo 刷新触发启动图使用记录。"""
+        self.config["wps_logo_trigger_used_images"] = []
+        self.save()
+
+    def get_logo_custom_images(self):
+        """获取仅用于 Logo 页显示的自定义图片文件名列表。"""
+        return self.config.get("logo_custom_images", [])
+
+    def add_logo_custom_image(self, filename):
+        """将自定义图片标记为 Logo 专用。"""
+        if not filename:
+            return
+
+        if "logo_custom_images" not in self.config:
+            self.config["logo_custom_images"] = []
+
+        images = self.config["logo_custom_images"]
+        if filename not in images:
+            images.append(filename)
+            self.save()
+
+    def remove_logo_custom_image(self, filename):
+        """取消 Logo 专用标记。"""
+        if "logo_custom_images" not in self.config:
+            return
+
+        images = self.config["logo_custom_images"]
+        if filename in images:
+            images.remove(filename)
+            self.save()
 
     def get_protected_files(self):
         """获取已记录的受保护文件路径列表"""
