@@ -87,7 +87,7 @@ class ImageManager:
             if "logo" not in img_file.name.lower():
                 continue
 
-            display_name = "默认Logo示例" if img_file.name == "logo_default_example.png" else img_file.stem
+            display_name = "默认OEM Logo示例" if img_file.name == "logo_default_example.png" else img_file.stem
             logo_images.append({
                 "filename": img_file.name,
                 "display_name": display_name,

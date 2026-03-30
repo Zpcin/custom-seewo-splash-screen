@@ -1,9 +1,9 @@
 """主窗口 - 只负责UI组装和事件分发"""
 
 import os
-from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget, QTextEdit, QApplication, QFileDialog
-from PyQt5.QtGui import QIcon
-from PyQt5.QtCore import QTimer, QSize, QEvent
+from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget, QApplication, QFileDialog
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont
+from PyQt5.QtCore import QTimer, QSize, QEvent, Qt
 from qfluentwidgets import FluentWindow, FluentIcon as FIF, IndeterminateProgressBar, NavigationItemPosition, SystemThemeListener, SplashScreen, PrimaryPushButton, PushButton, CaptionLabel, MessageBoxBase, SubtitleLabel, ComboBox, BodyLabel
 
 from core.config_manager import ConfigManager
@@ -18,7 +18,7 @@ from .settings import SettingsInterface
 
 
 class LogoRefreshTriggerDialog(MessageBoxBase):
-    """Logo 替换后启动图触发选择对话框。"""
+    """OEM Logo 替换后启动图触发选择对话框。"""
 
     def __init__(self, candidates: list, used_filenames: set, parent=None):
         super().__init__(parent)
@@ -26,7 +26,7 @@ class LogoRefreshTriggerDialog(MessageBoxBase):
 
         self.titleLabel = SubtitleLabel("选择触发启动图")
         self.infoLabel = BodyLabel(
-            "为使 Logo 更新生效，请手动选择一张启动图执行触发替换。\n"
+            "为使 OEM Logo 更新生效，请手动选择一张启动图执行触发替换。\n"
             "标记“[已用]”表示该图片此前已经用于触发。"
         )
         self.comboBox = ComboBox()
@@ -61,7 +61,7 @@ class MainWindow(FluentWindow):
         self._connect_signals()
         self._logo_card_base_text = ""
 
-        # 监听全局点击，实现 Logo 路径列表“点击外部自动收起”
+        # 监听全局点击，实现 OEM Logo 路径列表“点击外部自动收起”
         QApplication.instance().installEventFilter(self)
         
         # 创建系统主题监听器
@@ -120,7 +120,7 @@ class MainWindow(FluentWindow):
         # 主页
         self.homeInterface = QWidget()
         self.homeInterface.setObjectName("homeInterface")
-        self.addSubInterface(self.homeInterface, FIF.HOME, '希沃白板')
+        self.addSubInterface(self.homeInterface, self._create_nav_badge_icon("S", "#2E8B57"), '希沃白板')
         
         layout = QVBoxLayout(self.homeInterface)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -140,7 +140,7 @@ class MainWindow(FluentWindow):
         # WPS页面
         self.wpsInterface = QWidget()
         self.wpsInterface.setObjectName("wpsInterface")
-        self.addSubInterface(self.wpsInterface, FIF.DOCUMENT, 'WPS Office')
+        self.addSubInterface(self.wpsInterface, self._create_nav_badge_icon("W", "#D94A3A"), 'WPS Office')
         
         wps_layout = QVBoxLayout(self.wpsInterface)
         wps_layout.setContentsMargins(20, 20, 20, 20)
@@ -157,30 +157,29 @@ class MainWindow(FluentWindow):
         wps_layout.addWidget(self.wps_action_bar)
         wps_layout.addWidget(self.wps_progress_bar)
 
-        # Logo 页面（独立资源与替换逻辑）
+        # OEM Logo 页面（独立资源与替换逻辑）
         self.logoInterface = QWidget()
         self.logoInterface.setObjectName("logoInterface")
-        self.addSubInterface(self.logoInterface, FIF.PALETTE, 'WPS Logo')
+        self.addSubInterface(self.logoInterface, self._create_framed_nav_icon(FIF.LIBRARY.icon(), "#2F5D9F"), 'WPS OEM Logo')
 
         logo_layout = QVBoxLayout(self.logoInterface)
         logo_layout.setContentsMargins(20, 20, 20, 20)
         logo_layout.setSpacing(15)
 
         self.logo_path_card = PathInfoCard(self.logoInterface)
-        self.logo_path_list_title = CaptionLabel("Logo 目标路径列表")
-        self.logo_path_list = QTextEdit(self.logoInterface)
-        self.logo_path_list.setReadOnly(True)
-        self.logo_path_list.setPlaceholderText("检测到路径后，这里会列出所有 Logo 文件位置")
-        self.logo_path_list.setFixedHeight(120)
-        self.logo_path_list.setStyleSheet("""
-            QTextEdit {
+        self.logo_path_list_title = CaptionLabel("OEM Logo 文件位置")
+        self.logo_path_browser = QWidget(self.logoInterface)
+        self.logo_path_browser_layout = QVBoxLayout(self.logo_path_browser)
+        self.logo_path_browser_layout.setContentsMargins(12, 10, 12, 10)
+        self.logo_path_browser_layout.setSpacing(6)
+        self.logo_path_browser_label = BodyLabel("点击上方路径卡后查看 OEM Logo 文件路径")
+        self.logo_path_browser_label.setWordWrap(True)
+        self.logo_path_browser_layout.addWidget(self.logo_path_browser_label)
+        self.logo_path_browser.setStyleSheet("""
+            QWidget {
                 border: 1px solid rgba(0, 0, 0, 0.08);
                 border-radius: 10px;
                 background: rgba(255, 255, 255, 0.88);
-                padding: 10px 12px;
-                font-family: Consolas, "Microsoft YaHei UI";
-                font-size: 12px;
-                line-height: 1.4;
             }
         """)
         self.logo_image_list = ImageListWidget(self.logoInterface)
@@ -188,10 +187,10 @@ class MainWindow(FluentWindow):
         self.logo_action_layout = QHBoxLayout(self.logo_action_row)
         self.logo_action_layout.setContentsMargins(0, 0, 0, 0)
         self.logo_action_layout.setSpacing(10)
-        self.logo_import_btn = PushButton(FIF.ADD, "导入Logo")
-        self.logo_delete_btn = PushButton(FIF.DELETE, "删除Logo")
-        self.logo_restore_btn = PushButton(FIF.SYNC, "从备份还原Logo")
-        self.logo_replace_btn = PrimaryPushButton(FIF.UPDATE, "替换Logo")
+        self.logo_import_btn = PushButton(FIF.ADD, "导入OEM Logo")
+        self.logo_delete_btn = PushButton(FIF.DELETE, "删除OEM Logo")
+        self.logo_restore_btn = PushButton(FIF.SYNC, "从备份还原OEM Logo")
+        self.logo_replace_btn = PrimaryPushButton(FIF.UPDATE, "替换OEM Logo")
         self.logo_action_layout.addWidget(self.logo_import_btn)
         self.logo_action_layout.addWidget(self.logo_delete_btn)
         self.logo_action_layout.addWidget(self.logo_restore_btn)
@@ -202,14 +201,64 @@ class MainWindow(FluentWindow):
 
         # 默认折叠，点击路径卡后展开
         self.logo_path_list_title.setVisible(False)
-        self.logo_path_list.setVisible(False)
+        self.logo_path_browser.setVisible(False)
 
         logo_layout.addWidget(self.logo_path_card)
         logo_layout.addWidget(self.logo_path_list_title)
-        logo_layout.addWidget(self.logo_path_list)
+        logo_layout.addWidget(self.logo_path_browser)
         logo_layout.addWidget(self.logo_image_list, 1)
         logo_layout.addWidget(self.logo_action_row)
         logo_layout.addWidget(self.logo_progress_bar)
+
+    def _create_nav_badge_icon(self, text: str, bg_color: str) -> QIcon:
+        """创建带字母的导航徽标图标。"""
+        size = 20
+        pixmap = QPixmap(size, size)
+        pixmap.fill(QColor(0, 0, 0, 0))
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        painter.setBrush(QColor(bg_color))
+        painter.setPen(QColor(0, 0, 0, 0))
+        painter.drawRoundedRect(0, 0, size, size, 6, 6)
+
+        font = QFont("Segoe UI", 9)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor("#FFFFFF"))
+        painter.drawText(pixmap.rect(), int(Qt.AlignmentFlag.AlignCenter), text)
+
+        painter.end()
+        return QIcon(pixmap)
+
+    def _create_framed_nav_icon(self, source_icon: QIcon, bg_color: str) -> QIcon:
+        """创建带色块底的图标包图标，保持与字母徽标一致的风格。"""
+        size = 20
+        icon_size = 12
+        pixmap = QPixmap(size, size)
+        pixmap.fill(QColor(0, 0, 0, 0))
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(QColor(bg_color))
+        painter.setPen(QColor(0, 0, 0, 0))
+        painter.drawRoundedRect(0, 0, size, size, 6, 6)
+
+        icon_pixmap = source_icon.pixmap(icon_size, icon_size)
+        tinted_icon = QPixmap(icon_pixmap.size())
+        tinted_icon.fill(QColor(0, 0, 0, 0))
+        tint_painter = QPainter(tinted_icon)
+        tint_painter.drawPixmap(0, 0, icon_pixmap)
+        tint_painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+        tint_painter.fillRect(tinted_icon.rect(), QColor("#FFFFFF"))
+        tint_painter.end()
+
+        x = (size - icon_size) // 2
+        y = (size - icon_size) // 2
+        painter.drawPixmap(x, y, tinted_icon)
+        painter.end()
+        return QIcon(pixmap)
     
     def _init_settings_interface(self):
         """初始化设置界面"""
@@ -306,15 +355,19 @@ class MainWindow(FluentWindow):
         self.wps_action_bar.set_rename_delete_enabled(is_custom)
 
     def _on_logo_image_selected(self, image_info: dict):
-        """Logo页面图片选中事件"""
+        """OEM Logo页面图片选中事件"""
         pass
 
+    def _get_selected_logo_image_info(self):
+        """获取 OEM Logo 资源列表当前选中的图片信息。"""
+        return self.logo_image_list.get_selected_image_info()
+
     def _on_logo_import_image(self):
-        """Logo 页面导入图片事件。"""
+        """OEM Logo 页面导入图片事件。"""
         try:
             file_paths, _ = QFileDialog.getOpenFileNames(
                 self,
-                "选择Logo图片",
+                "选择OEM Logo图片",
                 os.path.expanduser("~"),
                 "PNG图片 (*.png)"
             )
@@ -338,7 +391,7 @@ class MainWindow(FluentWindow):
                     failed_files.append((os.path.basename(file_path), result))
 
             if success_count > 0:
-                tip = f"成功导入 {success_count} 个Logo"
+                tip = f"成功导入 {success_count} 个OEM Logo"
                 if first_import_name:
                     tip += f"（示例: {first_import_name}）"
                 if failed_files:
@@ -352,19 +405,19 @@ class MainWindow(FluentWindow):
                 error_details = "\n".join([f"• {name}: {reason}" for name, reason in failed_files[:5]])
                 if len(failed_files) > 5:
                     error_details += f"\n... 还有 {len(failed_files) - 5} 个文件失败"
-                MessageHelper.show_error(self, "部分Logo导入失败", error_details)
+                MessageHelper.show_error(self, "部分OEM Logo导入失败", error_details)
         except Exception as e:
-            MessageHelper.show_error(self, "Logo导入异常", str(e))
+            MessageHelper.show_error(self, "OEM Logo导入异常", str(e))
 
     def _on_logo_delete_image(self):
-        """Logo 页面删除图片事件。"""
-        image_info = self.logo_image_list.get_selected_image_info()
+        """OEM Logo 页面删除图片事件。"""
+        image_info = self._get_selected_logo_image_info()
         if not image_info:
-            MessageHelper.show_warning(self, "未选择图片", "请先选择要删除的 Logo 图片")
+            MessageHelper.show_warning(self, "未选择图片", "请先选择要删除的 OEM Logo 图片")
             return
 
         if image_info.get("type") != "custom":
-            MessageHelper.show_warning(self, "不可删除", "预设 Logo 资源不可删除")
+            MessageHelper.show_warning(self, "不可删除", "预设 OEM Logo 资源不可删除")
             return
 
         success, msg = self.wps_image_ctrl.delete_image(image_info)
@@ -565,7 +618,7 @@ class MainWindow(FluentWindow):
             MessageHelper.show_error(self, "检测失败", message)
 
     def _on_logo_detect_path(self):
-        """Logo页面检测路径事件"""
+        """OEM Logo页面检测路径事件"""
         self._on_wps_detect_path()
     
     def _on_wps_show_history(self):
@@ -579,7 +632,7 @@ class MainWindow(FluentWindow):
             self._on_wps_detect_path()
 
     def _on_logo_show_history(self):
-        """Logo页面显示历史路径事件"""
+        """OEM Logo页面显示历史路径事件"""
         self._on_wps_show_history()
     
     def _on_wps_import_image(self):
@@ -700,31 +753,35 @@ class MainWindow(FluentWindow):
             MessageHelper.show_error(self, "还原失败", msg)
 
     def _goto_logo_page(self):
-        """从 WPS 页面跳转到 Logo 页面。"""
+        """从 WPS 页面跳转到 OEM Logo 页面。"""
         self.switchTo(self.logoInterface)
 
     def _on_wps_replace_logo(self):
-        """WPS页面单独替换 Logo 事件"""
+        """WPS页面单独替换 OEM Logo 事件"""
         if not self.wps_path_ctrl.target_path:
             MessageHelper.show_warning(self, "未检测到路径", "请先点击'检测路径'按钮")
             return
 
-        image_info = self.logo_image_list.get_selected_image_info()
+        image_info = self._get_selected_logo_image_info()
         if not image_info:
-            MessageHelper.show_warning(self, "未选择Logo资源", "请先在 Logo 页面选择一个资源图片")
+            MessageHelper.show_warning(self, "未选择OEM Logo资源", "请先在 OEM Logo 页面选择一个资源图片")
             return
 
         logo_paths = self.wps_path_ctrl.get_logo_target_paths()
         if not logo_paths:
-            MessageHelper.show_warning(self, "未找到Logo文件", "当前 WPS 目录未检测到可替换的 companylogo.png")
+            MessageHelper.show_warning(
+                self,
+                "未找到OEM Logo文件",
+                "当前 WPS 目录未检测到可替换的 companylogo.png，可能不是 OEM 版本。"
+            )
             return
 
         startup_targets = self.wps_path_ctrl.get_target_paths()
         precheck_paths = list(dict.fromkeys(logo_paths + startup_targets[:1]))
-        if not self.permission_ctrl.ensure_admin_for_system_paths(self, precheck_paths, "替换 Logo"):
+        if not self.permission_ctrl.ensure_admin_for_system_paths(self, precheck_paths, "替换 OEM Logo"):
             return
 
-        self.show_progress(f"正在替换 {len(logo_paths)} 个Logo文件...", "logo")
+        self.show_progress(f"正在替换 {len(logo_paths)} 个OEM Logo文件...", "logo")
         success, msg, is_permission_error, success_count, failed_count = self.replacer.replace_multiple_images(
             image_info["path"],
             logo_paths,
@@ -736,60 +793,64 @@ class MainWindow(FluentWindow):
         if success:
             if success_count == len(logo_paths):
                 trigger_ok, trigger_msg = self._apply_logo_refresh_trigger_after_replace()
-                msg = f"Logo已替换为: {source_name}\n成功替换 {success_count} 个文件"
+                msg = f"OEM Logo已替换为: {source_name}\n成功替换 {success_count} 个文件"
                 if trigger_msg:
                     msg += f"\n{trigger_msg}"
                 if trigger_ok:
                     MessageHelper.show_success(self, msg, 5000)
                 else:
-                    MessageHelper.show_warning(self, "Logo替换完成（触发未完成）", msg, 6000)
+                    MessageHelper.show_warning(self, "OEM Logo替换完成（触发未完成）", msg, 6000)
             else:
-                MessageHelper.show_warning(self, "Logo部分替换成功", msg, 5000)
+                MessageHelper.show_warning(self, "OEM Logo部分替换成功", msg, 5000)
                 if is_permission_error:
                     self.permission_ctrl.handle_permission_error(
                         self,
-                        "部分 Logo 文件替换失败，可能需要管理员权限才能写入 Program Files 目录。"
+                        "部分 OEM Logo 文件替换失败，可能需要管理员权限才能写入 Program Files 目录。"
                     )
         elif is_permission_error:
             self.permission_ctrl.handle_permission_error(self, msg)
         else:
-            MessageHelper.show_error(self, "Logo替换失败", msg)
+            MessageHelper.show_error(self, "OEM Logo替换失败", msg)
 
     def _on_wps_restore_logo_backup(self):
-        """Logo 页面从备份还原 Logo 事件。"""
+        """OEM Logo 页面从备份还原 OEM Logo 事件。"""
         if not self.wps_path_ctrl.target_path:
             MessageHelper.show_warning(self, "未检测到路径", "请先点击'检测路径'按钮")
             return
 
         logo_paths = self.wps_path_ctrl.get_logo_target_paths()
         if not logo_paths:
-            MessageHelper.show_warning(self, "未找到Logo文件", "当前 WPS 目录未检测到可还原的 companylogo.png")
+            MessageHelper.show_warning(
+                self,
+                "未找到OEM Logo文件",
+                "当前 WPS 目录未检测到可还原的 companylogo.png，可能不是 OEM 版本。"
+            )
             return
 
-        if not self.permission_ctrl.ensure_admin_for_system_paths(self, logo_paths, "还原 Logo"):
+        if not self.permission_ctrl.ensure_admin_for_system_paths(self, logo_paths, "还原 OEM Logo"):
             return
 
-        self.show_progress(f"正在还原 {len(logo_paths)} 个Logo文件...", "logo")
+        self.show_progress(f"正在还原 {len(logo_paths)} 个OEM Logo文件...", "logo")
         success, msg, is_permission_error, success_count, failed_count = self.replacer.restore_multiple_backups(logo_paths)
         self.hide_progress("logo")
 
         if success:
             if success_count == len(logo_paths):
-                MessageHelper.show_success(self, f"已从备份还原Logo\n成功还原 {success_count} 个文件", 4000)
+                MessageHelper.show_success(self, f"已从备份还原OEM Logo\n成功还原 {success_count} 个文件", 4000)
             else:
-                MessageHelper.show_warning(self, "Logo部分还原成功", msg, 5000)
+                MessageHelper.show_warning(self, "OEM Logo部分还原成功", msg, 5000)
                 if is_permission_error:
                     self.permission_ctrl.handle_permission_error(
                         self,
-                        "部分 Logo 文件还原失败，可能需要管理员权限才能写入 Program Files 目录。"
+                        "部分 OEM Logo 文件还原失败，可能需要管理员权限才能写入 Program Files 目录。"
                     )
         elif is_permission_error:
             self.permission_ctrl.handle_permission_error(self, msg)
         else:
-            MessageHelper.show_error(self, "Logo还原失败", msg)
+            MessageHelper.show_error(self, "OEM Logo还原失败", msg)
 
     def _apply_logo_refresh_trigger_after_replace(self):
-        """Logo 替换后，手动选择启动图触发一次刷新。"""
+        """OEM Logo 替换后，手动选择启动图触发一次刷新。"""
         startup_targets = self.wps_path_ctrl.get_target_paths()
         if not startup_targets:
             return False, "未找到可用于触发刷新的启动图目标文件"
@@ -837,7 +898,7 @@ class MainWindow(FluentWindow):
             self.logo_path_card.update_path_display("")
             self._logo_card_base_text = self.logo_path_card.path_label.text()
             self._set_logo_path_list_visible(False)
-            self.logo_path_list.setPlainText("")
+            self.logo_path_browser_label.setText("未检测到 Logo 文件路径")
             return
 
         splash_paths = self.wps_path_ctrl.get_target_paths()
@@ -849,25 +910,32 @@ class MainWindow(FluentWindow):
         if logo_paths:
             self.logo_path_card.update_path_display(logo_paths[0], logo_count, "Logo")
             self._logo_card_base_text = self.logo_path_card.path_label.text()
-            self._set_logo_path_list_visible(self.logo_path_list.isVisible())
-            self.logo_path_list.setPlainText("\n".join(logo_paths))
+            if len(logo_paths) == 1:
+                display_text = f"• 路径 1\n{logo_paths[0]}"
+            else:
+                lines = []
+                for i, path in enumerate(logo_paths, start=1):
+                    lines.append(f"• 路径 {i}\n{path}")
+                display_text = "\n\n".join(lines)
+            self.logo_path_browser_label.setText(display_text)
+            self._set_logo_path_list_visible(self.logo_path_browser.isVisible())
         else:
             self.logo_path_card.update_path_display("", 0, "Logo")
             self._logo_card_base_text = self.logo_path_card.path_label.text()
             self._set_logo_path_list_visible(False)
-            self.logo_path_list.setPlainText("未检测到 Logo 目标文件")
+            self.logo_path_browser_label.setText("未检测到 OEM Logo 目标文件，可能不是 OEM 版本")
 
     def _on_logo_path_card_clicked(self):
         """点击 Logo 路径卡时展开路径列表。"""
-        self._set_logo_path_list_visible(True)
+        self._set_logo_path_list_visible(not self.logo_path_browser.isVisible())
 
     def _set_logo_path_list_visible(self, visible: bool):
-        """设置 Logo 路径小列表显示状态。"""
+        """设置 OEM Logo 路径小列表显示状态。"""
         self.logo_path_list_title.setVisible(visible)
-        self.logo_path_list.setVisible(visible)
+        self.logo_path_browser.setVisible(visible)
 
         if self._logo_card_base_text:
-            arrow = "▲" if visible else "▼"
+            arrow = "▾" if visible else "▸"
             self.logo_path_card.path_label.setText(f"{self._logo_card_base_text}  {arrow}")
 
     def _is_widget_in_container(self, widget, container):
@@ -880,11 +948,11 @@ class MainWindow(FluentWindow):
         return False
 
     def eventFilter(self, obj, event):
-        """全局点击处理：点击外部时收起 Logo 路径列表。"""
-        if event.type() == QEvent.Type.MouseButtonPress and hasattr(self, "logo_path_list"):
-            if self.logo_path_list.isVisible() and isinstance(obj, QWidget):
+        """全局点击处理：点击外部时收起 OEM Logo 路径列表。"""
+        if event.type() == QEvent.Type.MouseButtonPress and hasattr(self, "logo_path_browser"):
+            if self.logo_path_browser.isVisible() and isinstance(obj, QWidget):
                 clicked_in_path_card = self._is_widget_in_container(obj, self.logo_path_card)
-                clicked_in_path_list = self._is_widget_in_container(obj, self.logo_path_list)
+                clicked_in_path_list = self._is_widget_in_container(obj, self.logo_path_browser)
                 if not clicked_in_path_card and not clicked_in_path_list:
                     self._set_logo_path_list_visible(False)
 
@@ -946,13 +1014,14 @@ class MainWindow(FluentWindow):
             self.wps_image_list.select_image_by_filename(last_selected)
 
     def load_logo_images(self):
-        """加载 Logo 页面资源（仅 Logo）。"""
+        """加载 OEM Logo 页面资源（仅 OEM Logo）。"""
         preset_images = self.image_manager.get_logo_preset_images()
         logo_custom_set = set(self.config_manager.get_logo_custom_images())
         custom_images = [
             img for img in self.image_manager.get_custom_images(mode="all")
             if img["filename"] in logo_custom_set or "logo" in img["filename"].lower()
         ]
+
         self.logo_image_list.load_images(preset_images, custom_images)
 
         if preset_images:
