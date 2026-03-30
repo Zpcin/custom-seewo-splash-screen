@@ -50,6 +50,8 @@ class ImageManager:
             preset_names = {
                 "default_bg_hdpi.png": "默认 (高DPI)",
                 "default_bg.png": "默认",
+                "ent_background_2023_default.png": "2023年企业版默认（高DPI）",
+                "genshin_wps_oem_hdpi.png": "WPS 原神（OEM）",
                 "sup_default_bg_hdpi.png": "WPS 会员 (高DPI)",
                 "sup_default_bg.png": "WPS 会员",
                 "wps365_default_bg_hdpi.png": "WPS 365 (高DPI)",
