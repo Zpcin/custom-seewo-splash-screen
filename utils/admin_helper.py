@@ -3,14 +3,46 @@
 import ctypes
 import sys
 import os
+import subprocess
+from pathlib import Path
+
+
+def _write_admin_log(message: str):
+    """把提权相关错误写到临时日志，便于窗口程序排查。"""
+    try:
+        log_path = Path(os.environ.get("TEMP", os.getcwd())) / "SeewoSplash-admin.log"
+        with open(log_path, "a", encoding="utf-8") as log_file:
+            log_file.write(message.rstrip() + "\n")
+    except Exception:
+        pass
 
 
 def is_admin():
     """检查是否以管理员权限运行"""
     try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
         return False
+
+
+def _is_python_script_entry() -> bool:
+    """判断当前入口是否为 Python 脚本（.py/.pyw）。"""
+    if getattr(sys, "frozen", False):
+        return False
+
+    entry_suffix = os.path.splitext(sys.argv[0])[1].lower()
+    return entry_suffix in {".py", ".pyw"}
+
+
+def _get_admin_target_path() -> str:
+    """获取用于提权重启的目标路径。"""
+    if getattr(sys, "frozen", False):
+        return os.path.abspath(sys.argv[0])
+
+    if _is_python_script_entry():
+        return os.path.abspath(sys.executable)
+
+    return os.path.abspath(sys.executable)
 
 
 def run_as_admin():
@@ -21,38 +53,33 @@ def run_as_admin():
         bool: 是否成功请求重启
     """
     try:
-        result = 0
-        if sys.argv[0].endswith('.py'):
-            # 如果是Python脚本
+        if _is_python_script_entry():
+            # 脚本模式：提升 Python 解释器并传入脚本与参数
+            target = sys.executable
             script_path = os.path.abspath(sys.argv[0])
-            params = ' '.join([f'"{arg}"' for arg in sys.argv[1:]])
-            
-            result = ctypes.windll.shell32.ShellExecuteW(
-                None, 
-                "runas", 
-                sys.executable,
-                f'"{script_path}" {params}',
-                None, 
-                1
-            )
+            parameters = subprocess.list2cmdline([script_path, *sys.argv[1:]])
         else:
-            # 如果是打包后的exe
-            exe_path = sys.executable
-            params = ' '.join([f'"{arg}"' for arg in sys.argv[1:]])
-            
-            result = ctypes.windll.shell32.ShellExecuteW(
-                None,
-                "runas",
-                exe_path,
-                params,
-                None,
-                1
-            )
+            # 打包模式：直接提升当前可执行文件
+            target = _get_admin_target_path()
+            parameters = subprocess.list2cmdline(sys.argv[1:]) if len(sys.argv) > 1 else ""
+
+        result = ctypes.windll.shell32.ShellExecuteW(
+            None,
+            "runas",
+            target,
+            parameters,
+            None,
+            1,
+        )
 
         # ShellExecuteW 返回值 <= 32 表示失败或用户取消UAC
-        return result > 32
+        success = result > 32
+        if not success:
+            _write_admin_log(f"ShellExecuteW failed, result={result}, target={target}, params={parameters}")
+        return success
     except Exception as e:
         print(f"请求管理员权限失败: {e}")
+        _write_admin_log(f"Exception while requesting admin: {e}")
         return False
 
 

@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 
 def get_resource_path(relative_path):
     """
@@ -18,10 +19,14 @@ def get_resource_path(relative_path):
         # PyInstaller 创建临时文件夹，并将路径存储在 _MEIPASS 中
         base_path = sys._MEIPASS
     except AttributeError:
-        # 开发环境，使用项目根目录
-        base_path = os.path.abspath(".")
+        if getattr(sys, "frozen", False):
+            # 打包环境，使用可执行文件所在目录
+            base_path = Path(sys.executable).resolve().parent
+        else:
+            # 开发环境，使用项目根目录
+            base_path = Path(__file__).resolve().parent.parent
     
-    return os.path.join(base_path, relative_path)
+    return os.path.join(str(base_path), relative_path)
 
 
 def get_app_data_path(relative_path=""):
