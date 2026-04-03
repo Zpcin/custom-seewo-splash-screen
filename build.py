@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import argparse
 import tempfile
+import zipfile
 from importlib import metadata
 from pathlib import Path
 from core.app_info import __version__, __author__, __app_name__, get_version_string
@@ -59,15 +60,17 @@ def _detect_vsdevcmd_path():
 
 
 DEFAULT_VSDEVCMD = _detect_vsdevcmd_path()
+# 仅需修改这里即可切换默认构建后端: "nuitka" 或 "pyinstaller"
+DEFAULT_BACKEND = "nuitka"
 
 
 class Builder:
     """应用打包构建器"""
     
-    def __init__(self, backend="nuitka", nuitka_jobs=2, nuitka_mode="onefile", vsdevcmd=None):
+    def __init__(self, backend=DEFAULT_BACKEND, nuitka_jobs=2, nuitka_mode="onefile", vsdevcmd=None):
         self.root_dir = Path(__file__).parent
         self.dist_dir = self.root_dir / "dist"
-        self.nuitka_dist_dir = self.root_dir / "dist_nuitka"
+        self.nuitka_build_dir = self.root_dir / "nuitka_build"
         self.build_dir = self.root_dir / "build"
         self.app_name = __app_name__
         self.version = __version__
@@ -92,7 +95,7 @@ class Builder:
         print("步骤 1: 清理旧的构建文件...")
         print("=" * 60)
         
-        dirs_to_clean = [self.dist_dir, self.nuitka_dist_dir, self.build_dir]
+        dirs_to_clean = [self.dist_dir, self.nuitka_build_dir, self.build_dir]
         
         for dir_path in dirs_to_clean:
             if dir_path.exists():
@@ -313,20 +316,13 @@ class Builder:
         icon_path = self.create_icon()
         self.collect_data_files()
 
-        if not self.vsdevcmd or not self.vsdevcmd.exists():
-            print(f"✗ Visual Studio developer command script not found: {self.vsdevcmd}")
-            print("Please install the MSVC build tools.")
-            print("You can also pass: --vsdevcmd \"<path to VsDevCmd.bat>\"")
-            sys.exit(1)
-
         nuitka_args = [
             sys.executable,
             "-m",
             "nuitka",
             "--mode=onefile" if self.nuitka_mode == "onefile" else "--mode=standalone",
-            f"--output-dir={self.nuitka_dist_dir}",
+            f"--output-dir={self.nuitka_build_dir}",
             f"--output-filename={self.app_name}.exe",
-            "--msvc=latest",
             "--low-memory",
             f"--jobs={self.nuitka_jobs}",
             "--windows-console-mode=disable",
@@ -367,18 +363,91 @@ class Builder:
         if self.version_file and self.version_file.exists():
             print(f"✓ Version file generated: {self.version_file}")
 
-        vs_env = self._load_vsdevcmd_env()
+        if self.vsdevcmd and self.vsdevcmd.exists():
+            nuitka_args.insert(6, "--msvc=latest")
+            build_env = self._load_vsdevcmd_env()
+            print(f"✓ 编译器: MSVC ({self.vsdevcmd})")
+        else:
+            # 无 MSVC 时回退 MinGW64，提升在 CI/Actions 环境的可用性。
+            nuitka_args.insert(6, "--mingw64")
+            build_env = dict(os.environ)
+            print("⚠ 未检测到可用的 VsDevCmd.bat，已回退到 MinGW64 构建。")
+            print("  若在 GitHub Actions 使用 Zig，可安装 Zig 后设置:")
+            print("  CC='zig cc'  CXX='zig c++'")
 
         print("\nExecuting command:")
         print(" ".join(f'"{arg}"' if " " in arg else arg for arg in nuitka_args))
         print()
 
         try:
-            subprocess.check_call(nuitka_args, env=vs_env)
+            subprocess.check_call(nuitka_args, env=build_env)
             print("\n✓ Nuitka build completed")
         except subprocess.CalledProcessError as e:
             print(f"\n✗ Nuitka build failed: {e}")
             sys.exit(1)
+
+    def _get_release_dir(self):
+        """获取当前后端的发布目录。"""
+        return self.dist_dir / self.app_name
+
+    def _prepare_release_bundle(self):
+        """准备发布目录：可执行文件 + 文档 + 运行所需空目录。"""
+        print("\n" + "=" * 60)
+        print("步骤 9: 准备发布目录...")
+        print("=" * 60)
+
+        release_dir = self._get_release_dir()
+
+        if self.backend == "nuitka" and self.nuitka_mode == "onefile":
+            exe_path = self.nuitka_build_dir / f"{self.app_name}.exe"
+            if not exe_path.exists():
+                print(f"✗ 未找到可执行文件: {exe_path}")
+                return None
+
+            if release_dir.exists():
+                shutil.rmtree(release_dir, ignore_errors=True)
+
+            release_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(exe_path, release_dir / exe_path.name)
+            print(f"✓ 已复制可执行文件: {release_dir / exe_path.name}")
+        elif not release_dir.exists():
+            print(f"✗ 输出目录不存在: {release_dir}")
+            return None
+
+        # 添加分发文档
+        for doc_name in ["README.md", "LICENSE"]:
+            src = self.root_dir / doc_name
+            dst = release_dir / doc_name
+            if src.exists():
+                shutil.copy2(src, dst)
+                print(f"✓ 已添加文档: {dst.name}")
+
+        # 创建运行时目录，避免用户在其他位置启动时新建目录造成困惑
+        runtime_dirs = [
+            release_dir / "images" / "custom",
+            release_dir / "backups",
+        ]
+        for directory in runtime_dirs:
+            directory.mkdir(parents=True, exist_ok=True)
+            print(f"✓ 已创建目录: {directory.relative_to(release_dir)}")
+
+        return release_dir
+
+    def _zip_dir_with_empty_dirs(self, source_dir: Path, zip_file: Path):
+        """压缩目录并保留空目录条目。"""
+        with zipfile.ZipFile(zip_file, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            base_dir = source_dir.parent
+            for root, dirs, files in os.walk(source_dir):
+                root_path = Path(root)
+                rel_root = root_path.relative_to(base_dir).as_posix()
+
+                if not dirs and not files:
+                    zf.writestr(rel_root + "/", "")
+
+                for filename in files:
+                    file_path = root_path / filename
+                    arcname = file_path.relative_to(base_dir).as_posix()
+                    zf.write(file_path, arcname)
 
     def _load_vsdevcmd_env(self):
         """加载 VsDevCmd.bat 设置后的环境变量。"""
@@ -523,7 +592,7 @@ class Builder:
 
         if self.backend == "nuitka":
             if self.nuitka_mode == "onefile":
-                exe_path = self.nuitka_dist_dir / f"{self.app_name}.exe"
+                exe_path = self.nuitka_build_dir / f"{self.app_name}.exe"
                 if exe_path.exists():
                     size_mb = exe_path.stat().st_size / (1024 * 1024)
                     print(f"\n应用信息:")
@@ -537,7 +606,7 @@ class Builder:
                 else:
                     print(f"\n✗ 未找到可执行文件: {exe_path}")
             else:
-                exe_dir = self.nuitka_dist_dir / f"{self.app_name}.dist"
+                exe_dir = self.nuitka_build_dir / f"{self.app_name}.dist"
                 exe_path = exe_dir / f"{self.app_name}.exe"
                 if exe_path.exists():
                     total_size = sum(f.stat().st_size for f in exe_dir.rglob('*') if f.is_file())
@@ -594,27 +663,26 @@ class Builder:
         else:
             print(f"\n✗ 未找到可执行文件: {exe_path}")
     
-    def create_zip(self):
+    def create_zip(self, release_dir=None):
         """创建分发包"""
         print("\n" + "=" * 60)
-        print("步骤 9: 创建分发包...")
+        print("步骤 10: 创建分发包...")
         print("=" * 60)
-        
-        exe_dir = self.dist_dir / self.app_name
-        
-        if not exe_dir.exists():
+
+        target_dir = Path(release_dir) if release_dir else self._get_release_dir()
+
+        if not target_dir.exists():
             print("✗ 输出目录不存在，跳过")
             return
-        
+
         try:
             # 使用版本号作为文件名
             zip_name = f"{self.app_name}_v{self.version}"
-            zip_path = self.dist_dir / zip_name
-            
+            zip_file = self.dist_dir / f"{zip_name}.zip"
+
             print(f"正在创建压缩包: {zip_name}.zip")
-            shutil.make_archive(str(zip_path), 'zip', self.dist_dir, self.app_name)
-            
-            zip_file = Path(f"{zip_path}.zip")
+            self._zip_dir_with_empty_dirs(target_dir, zip_file)
+
             if zip_file.exists():
                 size_mb = zip_file.stat().st_size / (1024 * 1024)
                 print(f"✓ 压缩包创建成功: {zip_file}")
@@ -644,9 +712,12 @@ class Builder:
                 self.post_build()
                 self.verify_version_info()  # 新增：验证版本信息
                 self.show_result()
-                self.create_zip()
+                release_dir = self._prepare_release_bundle()
+                self.create_zip(release_dir)
             else:
                 self.show_result()
+                release_dir = self._prepare_release_bundle()
+                self.create_zip(release_dir)
             
             print("\n" + "=" * 60)
             print("构建流程全部完成! ✓")
@@ -661,7 +732,7 @@ class Builder:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build SeewoSplash")
-    parser.add_argument("--backend", choices=["pyinstaller", "nuitka"], default="nuitka")
+    parser.add_argument("--backend", choices=["pyinstaller", "nuitka"], default=DEFAULT_BACKEND)
     parser.add_argument("--nuitka-mode", choices=["onefile", "standalone"], default="onefile")
     parser.add_argument("--nuitka-jobs", type=int, default=2)
     parser.add_argument("--vsdevcmd", default=DEFAULT_VSDEVCMD)
@@ -675,14 +746,15 @@ if __name__ == "__main__":
         value = input(f"{prompt_text} [{default_value}]: ").strip()
         return value if value else str(default_value)
 
-    interactive_mode = args.interactive or len(sys.argv) == 1
+    interactive_mode = args.interactive
 
     if interactive_mode:
         print("\n" + "=" * 60)
         print("SeewoSplash 构建向导（中文交互）")
         print("=" * 60)
 
-        backend_input = _ask("选择构建后端 (1=PyInstaller, 2=Nuitka)", "2")
+        default_backend_choice = "1" if DEFAULT_BACKEND == "pyinstaller" else "2"
+        backend_input = _ask("选择构建后端 (1=PyInstaller, 2=Nuitka)", default_backend_choice)
         backend = "nuitka" if backend_input == "2" else "pyinstaller"
 
         nuitka_mode = "onefile"
