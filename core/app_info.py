@@ -1,9 +1,9 @@
-# file core\app_info.py
+﻿# file: core/app_info.py
 
-"""应用信息配置
+"""Application metadata.
 
-此文件包含应用的元信息，如版本号、作者等。
-这些信息不会存储在 config.json 中。
+This module stores app metadata such as version and author.
+These values are not stored in config.json.
 """
 
 __version__ = "2.3.4"
@@ -13,7 +13,6 @@ __description__ = "SeewoSplash"
 __license__ = "GPLv3"
 __repository__ = "https://github.com/fengyec2/custom-seewo-splash-screen"
 
-# 完整的应用信息字典
 APP_INFO = {
     "version": __version__,
     "author": __author__,
@@ -25,40 +24,43 @@ APP_INFO = {
 
 
 def get_version():
-    """获取版本号"""
+    """Get version string."""
     return __version__
 
 
 def get_author():
-    """获取作者"""
+    """Get author name."""
     return __author__
 
 
 def get_app_name():
-    """获取应用名称"""
+    """Get app name."""
     return __app_name__
 
+
 def get_repository():
-    """获取仓库名称"""
+    """Get repository URL."""
     return __repository__
 
+
 def get_full_info():
-    """获取完整的应用信息"""
+    """Get a copy of full app metadata."""
     return APP_INFO.copy()
 
 
 def get_version_string():
-    """获取格式化的版本字符串"""
+    """Get formatted version string."""
     return f"{__app_name__} v{__version__}"
 
 
 def get_about_text():
-    """获取关于信息文本"""
+    """Get about text."""
     return f"""{__app_name__} v{__version__}
 
 {__description__}
 
-作者: {__author__}
-许可证: {__license__}
-项目地址: {__repository__}
+Author: {__author__}
+License: {__license__}
+Repository: {__repository__}
 """
+

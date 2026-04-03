@@ -5,9 +5,11 @@ import subprocess
 import argparse
 import tempfile
 import zipfile
+import re
+import importlib
 from importlib import metadata
 from pathlib import Path
-from core.app_info import __version__, __author__, __app_name__, get_version_string
+from core.app_info import __version__, __author__, __app_name__
 
 
 def _detect_vsdevcmd_path():
@@ -62,12 +64,37 @@ def _detect_vsdevcmd_path():
 DEFAULT_VSDEVCMD = _detect_vsdevcmd_path()
 # 仅需修改这里即可切换默认构建后端: "nuitka" 或 "pyinstaller"
 DEFAULT_BACKEND = "nuitka"
+# 自动递增版本号默认开关（可被命令行覆盖）
+DEFAULT_AUTO_BUMP = False
+# 默认递增版本位：1=major, 2=minor, 3=patch, 4=build
+DEFAULT_BUMP_PART = 3
+# 默认递增步长
+DEFAULT_BUMP_STEP = 1
+# 是否启用“阈值进位”规则（例如 patch 到 100 后 minor +1）
+DEFAULT_BUMP_ROLLOVER = True
+# 触发进位的阈值（默认 99，达到 100 时进位）
+DEFAULT_BUMP_ROLLOVER_LIMIT = 30
+# 进位目标位（默认 2=minor，可选 1=major, 2=minor, 3=patch）
+DEFAULT_BUMP_CARRY_TO = 2
 
 
 class Builder:
     """应用打包构建器"""
     
-    def __init__(self, backend=DEFAULT_BACKEND, nuitka_jobs=2, nuitka_mode="onefile", vsdevcmd=None):
+    def __init__(
+        self,
+        backend=DEFAULT_BACKEND,
+        nuitka_jobs=2,
+        nuitka_mode="onefile",
+        vsdevcmd=None,
+        rcedit=None,
+        auto_bump=DEFAULT_AUTO_BUMP,
+        bump_part=DEFAULT_BUMP_PART,
+        bump_step=DEFAULT_BUMP_STEP,
+        bump_rollover=DEFAULT_BUMP_ROLLOVER,
+        bump_rollover_limit=DEFAULT_BUMP_ROLLOVER_LIMIT,
+        bump_carry_to=DEFAULT_BUMP_CARRY_TO,
+    ):
         self.root_dir = Path(__file__).parent
         self.dist_dir = self.root_dir / "dist"
         self.nuitka_build_dir = self.root_dir / "nuitka_build"
@@ -80,6 +107,13 @@ class Builder:
         self.backend = backend
         self.nuitka_jobs = nuitka_jobs
         self.nuitka_mode = nuitka_mode
+        self.auto_bump = bool(auto_bump)
+        self.bump_part = self._normalize_bump_part(bump_part)
+        self.bump_step = max(1, int(bump_step))
+        self.bump_rollover = bool(bump_rollover)
+        self.bump_rollover_limit = max(0, int(bump_rollover_limit))
+        self.bump_carry_to = self._normalize_bump_part(bump_carry_to)
+        self.rcedit = Path(rcedit).resolve() if rcedit else None
         normalized_vsdevcmd = (vsdevcmd or DEFAULT_VSDEVCMD or "").strip()
         # Tolerate pasted inputs like \"C:\\...\\VsDevCmd.bat\"
         normalized_vsdevcmd = normalized_vsdevcmd.replace('\\"', '"').strip()
@@ -88,6 +122,93 @@ class Builder:
         ):
             normalized_vsdevcmd = normalized_vsdevcmd[1:-1].strip()
         self.vsdevcmd = Path(normalized_vsdevcmd) if normalized_vsdevcmd else None
+
+    def _normalize_bump_part(self, bump_part):
+        """将版本位参数标准化到 1-4。"""
+        mapping = {
+            "major": 1,
+            "minor": 2,
+            "patch": 3,
+            "build": 4,
+            "1": 1,
+            "2": 2,
+            "3": 3,
+            "4": 4,
+        }
+        key = str(bump_part).strip().lower()
+        if key in mapping:
+            return mapping[key]
+        return DEFAULT_BUMP_PART
+
+    def _bump_part_name(self):
+        names = {1: "major", 2: "minor", 3: "patch", 4: "build"}
+        return names.get(self.bump_part, "patch")
+
+    def _auto_bump_version_if_enabled(self):
+        """按配置自动递增 core/app_info.py 中的 __version__。"""
+        if not self.auto_bump:
+            return False
+
+        app_info_path = self.root_dir / "core" / "app_info.py"
+        if not app_info_path.exists():
+            print(f"⚠ 跳过自动递增：未找到文件 {app_info_path}")
+            return False
+
+        with open(app_info_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        version_match = re.search(r'__version__\s*=\s*"([0-9]+(?:\.[0-9]+){0,3})"', content)
+        if not version_match:
+            print("⚠ 跳过自动递增：未找到 __version__ 定义")
+            return False
+
+        old_version = version_match.group(1)
+        parts = [int(x) for x in old_version.split(".")]
+        while len(parts) < 4:
+            parts.append(0)
+
+        index = self.bump_part - 1
+        parts[index] += self.bump_step
+
+        # 可选进位规则：被递增位超过阈值后，向指定高位进位。
+        # 常见配置：bump_part=3 (patch), carry_to=2 (minor), limit=99。
+        if self.bump_rollover:
+            radix = self.bump_rollover_limit + 1
+            carry_index = self.bump_carry_to - 1
+            if carry_index < index and parts[index] >= radix:
+                carry, parts[index] = divmod(parts[index], radix)
+                parts[carry_index] += carry
+                # 进位后，carry_to 之后的低位统一归零，保持版本整洁。
+                for i in range(carry_index + 1, len(parts)):
+                    if i != index:
+                        parts[i] = 0
+
+        for i in range(index + 1, len(parts)):
+            parts[i] = 0
+
+        if self.bump_part <= 3:
+            new_version = ".".join(str(x) for x in parts[:3])
+        else:
+            new_version = ".".join(str(x) for x in parts)
+
+        updated = re.sub(
+            r'__version__\s*=\s*"([0-9]+(?:\.[0-9]+){0,3})"',
+            f'__version__ = "{new_version}"',
+            content,
+            count=1,
+        )
+
+        with open(app_info_path, "w", encoding="utf-8") as f:
+            f.write(updated)
+
+        self.version = new_version
+        print(
+            f"✓ 自动递增版本号: {old_version} -> {new_version} "
+            f"(part={self._bump_part_name()}, step={self.bump_step}, "
+            f"rollover={'on' if self.bump_rollover else 'off'}, "
+            f"limit={self.bump_rollover_limit}, carry_to={self.bump_carry_to})"
+        )
+        return True
         
     def clean(self):
         """清理之前的构建文件"""
@@ -164,9 +285,15 @@ class Builder:
         print("=" * 60)
         
         try:
-            # 导入并运行版本文件生成器
-            from create_version_file import create_version_file
-            self.version_file = create_version_file()
+            # 自动递增后需要重载模块，避免使用缓存的旧版本号。
+            import core.app_info as app_info_module
+            import create_version_file as create_version_module
+
+            app_info_module = importlib.reload(app_info_module)
+            create_version_module = importlib.reload(create_version_module)
+
+            self.version = app_info_module.__version__
+            self.version_file = create_version_module.create_version_file()
             print("✓ 版本信息文件生成完成\n")
             return True
         except Exception as e:
@@ -389,6 +516,40 @@ class Builder:
     def _get_release_dir(self):
         """获取当前后端的发布目录。"""
         return self.dist_dir / self.app_name
+
+    def _get_release_exe(self):
+        """获取发布目录中的主程序路径。"""
+        release_exe = self._get_release_dir() / f"{self.app_name}.exe"
+        if release_exe.exists():
+            return release_exe
+
+        # 兼容仅编译未整理发布目录时的路径
+        nuitka_onefile_exe = self.nuitka_build_dir / f"{self.app_name}.exe"
+        if nuitka_onefile_exe.exists():
+            return nuitka_onefile_exe
+
+        pyi_exe = self.dist_dir / self.app_name / f"{self.app_name}.exe"
+        if pyi_exe.exists():
+            return pyi_exe
+
+        return None
+
+    def _find_rcedit(self):
+        """查找可用的 rcedit 可执行文件。"""
+        if self.rcedit and self.rcedit.exists():
+            return str(self.rcedit)
+
+        candidates = [
+            self.root_dir / "tools" / "rcedit.exe",
+            self.root_dir / "rcedit.exe",
+        ]
+        for path in candidates:
+            if path.exists():
+                return str(path)
+
+        from shutil import which
+        found = which("rcedit") or which("rcedit.exe")
+        return found
 
     def _prepare_release_bundle(self):
         """准备发布目录：可执行文件 + 文档 + 运行所需空目录。"""
@@ -695,15 +856,19 @@ class Builder:
     def run(self):
         """运行完整构建流程"""
         print("\n" + "=" * 60)
-        print(f"开始构建: {get_version_string()}")
+        print(f"开始构建: {self.app_name} v{self.version}")
         print(f"作者: {self.author}")
         print(f"后端: {self.backend}")
+        print(f"自动递增版本号: {'开启' if self.auto_bump else '关闭'}")
+        if self.auto_bump:
+            print(f"递增位: {self._bump_part_name()}  步长: {self.bump_step}")
         if self.backend == "nuitka":
             print(f"Nuitka mode: {self.nuitka_mode}")
             print(f"Nuitka jobs: {self.nuitka_jobs}")
         print("=" * 60 + "\n")
         
         try:
+            self._auto_bump_version_if_enabled()
             self.clean()
             self.check_dependencies()
             self.create_version_file()  # 新增：生成版本信息文件
@@ -729,6 +894,92 @@ class Builder:
             traceback.print_exc()
             sys.exit(1)
 
+    def run_info_only(self):
+        """仅更新版本信息文件，不进行编译。"""
+        print("\n" + "=" * 60)
+        print(f"仅更新版本信息: {self.app_name} v{self.version}")
+        print(f"自动递增版本号: {'开启' if self.auto_bump else '关闭'}")
+        if self.auto_bump:
+            print(f"递增位: {self._bump_part_name()}  步长: {self.bump_step}")
+        print("=" * 60 + "\n")
+
+        try:
+            self._auto_bump_version_if_enabled()
+            success = self.create_version_file()
+            if not success:
+                sys.exit(1)
+
+            print("=" * 60)
+            print("版本信息更新完成! ✓")
+            print("=" * 60 + "\n")
+        except Exception as e:
+            print(f"\n✗ 更新版本信息失败: {e}")
+            sys.exit(1)
+
+    def run_metadata_only(self):
+        """仅更新现有 exe 的元数据，不进行编译。"""
+        print("\n" + "=" * 60)
+        print(f"仅更新文件元数据: {self.app_name} v{self.version}")
+        print("=" * 60 + "\n")
+
+        exe_path = self._get_release_exe()
+        if not exe_path:
+            print("✗ 未找到可更新元数据的 exe，请先完成一次编译。")
+            sys.exit(1)
+
+        rcedit = self._find_rcedit()
+        if not rcedit:
+            print("✗ 未找到 rcedit，可执行文件元数据无法直接更新。")
+            print("  你可以将 rcedit.exe 放到项目根目录或 tools/ 目录后重试。")
+            print("  或通过参数指定: --rcedit <rcedit.exe 路径>")
+            sys.exit(1)
+
+        file_version = str(self.version)
+        product_version = str(self.version)
+        legal_copyright = f"Copyright © {self._get_current_year()} {self.author}"
+        args = [
+            rcedit,
+            str(exe_path),
+            "--set-file-version", file_version,
+            "--set-product-version", product_version,
+            "--set-version-string", "ProductName", self.app_name,
+            "--set-version-string", "FileDescription", self.app_name,
+            "--set-version-string", "CompanyName", self.author,
+            "--set-version-string", "LegalCopyright", legal_copyright,
+        ]
+
+        print(f"目标文件: {exe_path}")
+        print(f"使用工具: {rcedit}")
+        try:
+            subprocess.check_call(args)
+            print("\n✓ 已更新现有 exe 元数据（无需重新编译）")
+            print("  可在文件属性 -> 详细信息中确认。")
+        except subprocess.CalledProcessError as e:
+            print(f"\n✗ 更新元数据失败: {e}")
+            sys.exit(1)
+
+    def run_package_only(self):
+        """仅打包现有产物，不进行编译。"""
+        print("\n" + "=" * 60)
+        print(f"仅打包现有产物: {self.app_name} v{self.version}")
+        print(f"后端: {self.backend}")
+        print("=" * 60 + "\n")
+
+        try:
+            release_dir = self._prepare_release_bundle()
+            if not release_dir:
+                print("✗ 未找到可用于打包的现有产物，请先执行一次完整编译。")
+                sys.exit(1)
+
+            self.create_zip(release_dir)
+
+            print("=" * 60)
+            print("仅打包流程完成! ✓")
+            print("=" * 60 + "\n")
+        except Exception as e:
+            print(f"\n✗ 仅打包失败: {e}")
+            sys.exit(1)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build SeewoSplash")
@@ -736,8 +987,36 @@ if __name__ == "__main__":
     parser.add_argument("--nuitka-mode", choices=["onefile", "standalone"], default="onefile")
     parser.add_argument("--nuitka-jobs", type=int, default=2)
     parser.add_argument("--vsdevcmd", default=DEFAULT_VSDEVCMD)
+    parser.add_argument("--rcedit", default=None, help="rcedit.exe 路径（用于 metadata-only）")
+    parser.add_argument("--auto-bump", action="store_true", help="开启自动递增版本号（可覆盖默认配置）")
+    parser.add_argument("--no-auto-bump", action="store_true", help="关闭自动递增版本号（可覆盖默认配置）")
+    parser.add_argument(
+        "--bump-part",
+        default=str(DEFAULT_BUMP_PART),
+        choices=["major", "minor", "patch", "build", "1", "2", "3", "4"],
+        help="指定递增版本位（默认第3位 patch）",
+    )
+    parser.add_argument("--bump-step", type=int, default=DEFAULT_BUMP_STEP, help="指定递增步长，默认 1")
+    parser.add_argument("--bump-rollover", action="store_true", help="开启阈值进位（可覆盖默认配置）")
+    parser.add_argument("--no-bump-rollover", action="store_true", help="关闭阈值进位（可覆盖默认配置）")
+    parser.add_argument("--bump-rollover-limit", type=int, default=DEFAULT_BUMP_ROLLOVER_LIMIT, help="进位阈值，默认 99")
+    parser.add_argument(
+        "--bump-carry-to",
+        default=str(DEFAULT_BUMP_CARRY_TO),
+        choices=["major", "minor", "patch", "1", "2", "3"],
+        help="阈值进位目标位（默认 2=minor）",
+    )
     parser.add_argument("--interactive", action="store_true", help="使用中文交互模式")
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--info-only", action="store_true", help="仅更新版本信息文件，不进行编译")
+    mode_group.add_argument("--package-only", action="store_true", help="仅打包现有产物，不进行编译")
+    mode_group.add_argument("--metadata-only", action="store_true", help="仅更新现有 exe 元数据，不进行编译")
     args = parser.parse_args()
+
+    if args.auto_bump and args.no_auto_bump:
+        parser.error("--auto-bump 和 --no-auto-bump 不能同时使用")
+    if args.bump_rollover and args.no_bump_rollover:
+        parser.error("--bump-rollover 和 --no-bump-rollover 不能同时使用")
 
     def _ask(prompt_text, default_value=None):
         if default_value is None:
@@ -746,7 +1025,7 @@ if __name__ == "__main__":
         value = input(f"{prompt_text} [{default_value}]: ").strip()
         return value if value else str(default_value)
 
-    interactive_mode = args.interactive
+    interactive_mode = args.interactive and not args.info_only and not args.package_only and not args.metadata_only
 
     if interactive_mode:
         print("\n" + "=" * 60)
@@ -783,10 +1062,37 @@ if __name__ == "__main__":
         args.nuitka_jobs = nuitka_jobs
         args.vsdevcmd = vsdevcmd
 
+    auto_bump = DEFAULT_AUTO_BUMP
+    if args.auto_bump:
+        auto_bump = True
+    elif args.no_auto_bump:
+        auto_bump = False
+
+    bump_rollover = DEFAULT_BUMP_ROLLOVER
+    if args.bump_rollover:
+        bump_rollover = True
+    elif args.no_bump_rollover:
+        bump_rollover = False
+
     builder = Builder(
         backend=args.backend,
         nuitka_jobs=args.nuitka_jobs,
         nuitka_mode=args.nuitka_mode,
         vsdevcmd=args.vsdevcmd,
+        rcedit=args.rcedit,
+        auto_bump=auto_bump,
+        bump_part=args.bump_part,
+        bump_step=args.bump_step,
+        bump_rollover=bump_rollover,
+        bump_rollover_limit=args.bump_rollover_limit,
+        bump_carry_to=args.bump_carry_to,
     )
-    builder.run()
+
+    if args.info_only:
+        builder.run_info_only()
+    elif args.package_only:
+        builder.run_package_only()
+    elif args.metadata_only:
+        builder.run_metadata_only()
+    else:
+        builder.run()

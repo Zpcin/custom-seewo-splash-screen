@@ -122,6 +122,30 @@ python build.py --interactive
 - 如果系统没有可用的 MSVC 开发环境，构建脚本会自动回退到可用的编译方案并给出提示
 - 旧的根目录 exe 和中间构建目录会在构建前自动清理
 
+### 版本号自动递增与进位
+
+构建脚本支持通过“变量默认值 + 命令行参数”两种方式控制自动版本号：
+
+- 开关：`--auto-bump` / `--no-auto-bump`
+- 递增位：`--bump-part {major|minor|patch|build|1|2|3|4}`
+- 递增步长：`--bump-step <数字>`
+- 进位开关：`--bump-rollover` / `--no-bump-rollover`
+- 进位阈值：`--bump-rollover-limit <数字>`
+- 进位目标位：`--bump-carry-to {major|minor|patch|1|2|3}`
+
+默认策略是：
+
+- 默认关闭自动递增版本号
+- 主版本号（第一位）一般不自动变更
+- 常用递增位为 `patch`（第三位）
+- 当最后一位超过阈值（默认 30）时，自动进位到第二位（`minor`）
+
+示例：当 `patch` 到 99 后，下次构建变成 `minor + 1` 且 `patch` 归零：
+
+```bash
+python build.py --auto-bump --bump-part patch --bump-rollover --bump-rollover-limit 30 --bump-carry-to minor
+```
+
 ## 使用说明
 
 ### 首次使用
