@@ -31,6 +31,7 @@ SeewoSplash 是一个 Fluent 风格的图形化工具，允许你自定义希沃
 - 🔍 **路径检测** - 自动检测 希沃白板/WPS Office 安装路径，支持所有新旧版
 - 💾 **自动备份** - 替换前备份原始图片，支持还原
 - 🖼️ **图片管理** - 支持重命名、删除自定义图片
+- 🏷️ **WPS OEM Logo** - 支持替换和导入 WPS OEM Logo
 - 🔃 **权限管理** - 权限不足时尝试以管理员身份重启
 - 🛡️ **防止恢复** - 防止启动图被其他应用还原
 - 📱 **用户页面** - 优雅的 Fluent UI 设计
@@ -47,7 +48,10 @@ SeewoSplash 是一个 Fluent 风格的图形化工具，允许你自定义希沃
 
 1. 前往 [Releases](https://github.com/fengyec2/custom-seewo-splash-screen/releases) 页面获取正式版（或前往 [Actions](https://github.com/fengyec2/custom-seewo-splash-screen/actions) 页面获取测试版）
 2. 下载最新版本的 `SeewoSplash.zip`
-3. 解压后运行 `SeewoSplash.exe` 即可使用
+3. 解压后直接运行 `SeewoSplash.exe` 即可使用
+
+> [!NOTE]
+> 发行包内会包含程序本体、`README.md`、`LICENSE`，以及运行时需要的空目录结构。
 
 > [!NOTE]
 > 带有 Full 字样的是支持亚克力效果的版本，与 Lite 版只有这个区别
@@ -93,14 +97,30 @@ python main.py
 如果你想自己构建可执行文件：
 
 ```bash
-# 安装 PyInstaller
-pip install pyinstaller
-
 # 构建
 python build.py
 ```
 
-构建完成后，可执行文件将位于 `dist/` 目录下。
+默认情况下，`python build.py` 会自动检测环境并使用 Nuitka 编译，然后把发布包输出到 `dist/`。
+
+构建完成后，你会得到：
+
+- `dist/SeewoSplash/`：程序运行目录
+- `dist/SeewoSplash_v版本号.zip`：最终分发包
+
+如果你想进入交互模式，显式加上：
+
+```bash
+python build.py --interactive
+```
+
+在交互模式下，才会提示你选择 PyInstaller 或 Nuitka。
+
+说明：
+
+- 默认无参数时，不会进入交互流程
+- 如果系统没有可用的 MSVC 开发环境，构建脚本会自动回退到可用的编译方案并给出提示
+- 旧的根目录 exe 和中间构建目录会在构建前自动清理
 
 ## 使用说明
 
@@ -124,6 +144,18 @@ python build.py
 1. 点击"从备份还原"按钮
 2. 程序会自动从备份恢复原始图片
 
+### 替换 WPS OEM Logo
+
+如果你想替换 WPS 的 OEM Logo：
+
+1. 切换到 `WPS OEM Logo` 页面
+2. 点击"检测路径"，让程序定位 OEM Logo 文件
+3. 导入或选择一张 PNG 图片
+4. 点击"替换OEM Logo" 完成替换
+
+> [!NOTE]
+> OEM Logo 和启动图是分开的资源，页面、图片库和替换流程也彼此独立。
+
 ## 项目结构
 
 ```
@@ -133,7 +165,8 @@ custom-seewo-splash-screen/
 ├── build.py                     # 构建脚本
 ├── assets/                      # 资源文件
 │   ├── icon.ico                 # 程序图标
-│   └── preset/                  # 预设启动图
+│   └── presets/                 # 预设启动图与 WPS 资源
+│       └── wps/                 # WPS 启动图和 OEM Logo 预设
 ├── core/                        # 核心功能模块
 │   ├── app_info.py              # 应用信息管理
 │   ├── config_manager.py        # 配置管理
@@ -142,22 +175,22 @@ custom-seewo-splash-screen/
 │   └── replacer.py              # 图片替换
 ├── ui/                          # 用户界面
 │   ├── __init__.py
-│   ├── main_window.py               # 主窗口
-│   ├── settings.py                  # 设置页面
-│   ├── controllers/                 # 控制器层
+│   ├── main_window.py           # 主窗口
+│   ├── settings.py              # 设置页面
+│   ├── controllers/             # 控制器层
 │   │   ├── __init__.py
-│   │   ├── path_controller.py       # 路径管理控制器
-│   │   ├── image_controller.py      # 图片操作控制器
+│   │   ├── path_controller.py   # 路径管理控制器
+│   │   ├── image_controller.py  # 图片操作控制器
 │   │   └── permission_controller.py # 权限处理控制器
 │   ├── widgets/                 # UI 组件
 │   │   ├── __init__.py
 │   │   ├── path_card.py         # 路径信息卡片
 │   │   ├── image_list.py        # 图片列表组件
 │   │   └── action_bar.py        # 操作按钮栏
-│   └── dialogs/                     # 对话框
+│   └── dialogs/                 # 对话框
 │       ├── __init__.py
-│       ├── message_helper.py        # 消息提示辅助类
-│       └── path_history_dialog.py   # 历史路径对话框
+│       ├── message_helper.py    # 消息提示辅助类
+│       └── path_history_dialog.py # 历史路径对话框
 └── utils/                       # 工具模块
     ├── admin_helper.py          # 管理员权限管理
     ├── resource_path.py         # 资源路径管理
@@ -185,6 +218,14 @@ A: 请尝试：
 ### Q: 可以恢复到原始图片吗？
 
 A: 可以！程序在首次替换时会自动备份原始图片，点击"从备份还原"即可恢复
+
+### Q: 构建后生成的目录结构是什么样的？
+
+A: 发布包会放在 `dist/` 下，解压后包含：
+1. 主程序 `SeewoSplash.exe`
+2. `README.md` 和 `LICENSE`
+3. 运行所需的空目录，例如 `images/custom` 和 `backups`
+4. 资源与依赖目录
 
 ### Q: 为什么替换后在文件资源管理器中找不到启动图了？
 

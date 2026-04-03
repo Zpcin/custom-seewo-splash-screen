@@ -22,12 +22,22 @@ def _startup_excepthook(exc_type, exc_value, exc_tb):
     _write_startup_error(error_text)
     sys.__excepthook__(exc_type, exc_value, exc_tb)
 
+
+def _consume_internal_startup_flags() -> bool:
+    """消费内部启动参数，返回是否为内部提权重启。"""
+    elevated = "--elevated" in sys.argv
+    if elevated:
+        sys.argv = [arg for arg in sys.argv if arg != "--elevated"]
+    return elevated
+
 def main():
     sys.excepthook = _startup_excepthook
 
     try:
+        launched_from_internal_elevation = _consume_internal_startup_flags()
+
         # 默认启动时优先申请管理员权限（用户可取消）
-        if not is_admin():
+        if not launched_from_internal_elevation and not is_admin():
             if run_as_admin():
                 return
 

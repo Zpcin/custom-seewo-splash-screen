@@ -34,15 +34,14 @@ def _is_python_script_entry() -> bool:
     return entry_suffix in {".py", ".pyw"}
 
 
-def _get_admin_target_path() -> str:
-    """获取用于提权重启的目标路径。"""
-    if getattr(sys, "frozen", False):
-        return os.path.abspath(sys.argv[0])
+def _is_internal_elevated_launch() -> bool:
+    """检查是否为内部提权重启。"""
+    return "--elevated" in sys.argv
 
-    if _is_python_script_entry():
-        return os.path.abspath(sys.executable)
 
-    return os.path.abspath(sys.executable)
+def _strip_internal_flags(arguments: list[str]) -> list[str]:
+    """移除内部控制参数。"""
+    return [arg for arg in arguments if arg != "--elevated"]
 
 
 def run_as_admin():
@@ -53,22 +52,24 @@ def run_as_admin():
         bool: 是否成功请求重启
     """
     try:
+        current_directory = os.path.dirname(os.path.abspath(sys.executable))
+
         if _is_python_script_entry():
             # 脚本模式：提升 Python 解释器并传入脚本与参数
-            target = sys.executable
+            target = os.path.abspath(sys.executable)
             script_path = os.path.abspath(sys.argv[0])
-            parameters = subprocess.list2cmdline([script_path, *sys.argv[1:]])
+            parameters = subprocess.list2cmdline([script_path, "--elevated", *_strip_internal_flags(sys.argv[1:])])
         else:
             # 打包模式：直接提升当前可执行文件
-            target = _get_admin_target_path()
-            parameters = subprocess.list2cmdline(sys.argv[1:]) if len(sys.argv) > 1 else ""
+            target = os.path.abspath(sys.executable)
+            parameters = subprocess.list2cmdline(["--elevated", *_strip_internal_flags(sys.argv[1:])]) if len(sys.argv) > 1 else "--elevated"
 
         result = ctypes.windll.shell32.ShellExecuteW(
             None,
             "runas",
             target,
             parameters,
-            None,
+            current_directory,
             1,
         )
 
