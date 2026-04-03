@@ -37,8 +37,10 @@ def main():
         launched_from_internal_elevation = _consume_internal_startup_flags()
 
         # 默认启动时优先申请管理员权限（用户可取消）
-        if not launched_from_internal_elevation and not is_admin():
-            if run_as_admin():
+        if not is_admin():
+            if launched_from_internal_elevation:
+                _write_startup_error("内部提权重启后仍未获得管理员权限，可能被系统策略或安全软件拦截。")
+            elif run_as_admin():
                 return
 
         # 在创建QApplication之前设置高DPI支持

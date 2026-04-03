@@ -44,6 +44,22 @@ def _strip_internal_flags(arguments: list[str]) -> list[str]:
     return [arg for arg in arguments if arg != "--elevated"]
 
 
+def _resolve_frozen_elevation_target() -> str:
+    """在冻结环境中解析可用的提权目标 exe。"""
+    argv0 = os.path.abspath(sys.argv[0]) if sys.argv else ""
+    executable = os.path.abspath(sys.executable)
+
+    # Nuitka onefile 下 sys.executable 可能指向临时目录 python.exe；
+    # 优先使用用户实际启动的主程序路径。
+    if argv0 and os.path.isfile(argv0) and argv0.lower().endswith(".exe"):
+        return argv0
+
+    if executable and os.path.isfile(executable):
+        return executable
+
+    return argv0 or executable
+
+
 def run_as_admin():
     """
     请求以管理员权限重启程序
@@ -52,8 +68,6 @@ def run_as_admin():
         bool: 是否成功请求重启
     """
     try:
-        current_directory = os.path.dirname(os.path.abspath(sys.executable))
-
         if _is_python_script_entry():
             # 脚本模式：提升 Python 解释器并传入脚本与参数
             target = os.path.abspath(sys.executable)
@@ -61,8 +75,14 @@ def run_as_admin():
             parameters = subprocess.list2cmdline([script_path, "--elevated", *_strip_internal_flags(sys.argv[1:])])
         else:
             # 打包模式：直接提升当前可执行文件
-            target = os.path.abspath(sys.executable)
+            target = _resolve_frozen_elevation_target()
             parameters = subprocess.list2cmdline(["--elevated", *_strip_internal_flags(sys.argv[1:])]) if len(sys.argv) > 1 else "--elevated"
+
+        current_directory = os.path.dirname(target) if target else None
+        _write_admin_log(
+            f"run_as_admin: frozen={getattr(sys, 'frozen', False)}, argv0={os.path.abspath(sys.argv[0]) if sys.argv else ''}, "
+            f"sys.executable={os.path.abspath(sys.executable)}, target={target}, cwd={current_directory}, params={parameters}"
+        )
 
         result = ctypes.windll.shell32.ShellExecuteW(
             None,
